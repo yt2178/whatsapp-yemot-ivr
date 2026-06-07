@@ -1,0 +1,29 @@
+name: WhatsApp to Yemot IVR
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Run processor
+        env:
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
+          YEMOT_USERNAME: ${{ secrets.YEMOT_USERNAME }}
+          YEMOT_PASSWORD: ${{ secrets.YEMOT_PASSWORD }}
+          YEMOT_EXTENSION: ${{ secrets.YEMOT_EXTENSION }}
+        run: python main.py
