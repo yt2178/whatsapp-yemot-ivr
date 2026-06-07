@@ -7,10 +7,10 @@ YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')
 
-def get_last_group_message():
-    """שולף את כל ההודעות מהתור ומחזיר רק האחרונה מקבוצה כלשהי"""
-    all_receipts = []
-    last_message = None
+def get_group_messages():
+    """שולף את כל ההודעות מהתור, מחזיר רק אלו מקבוצות לפי סדר זמן"""
+    messages = []
+    receipts_to_delete = []
 
     for _ in range(50):
         r = requests.get(
@@ -23,16 +23,17 @@ def get_last_group_message():
 
         rid = d.get('receiptId')
         body = d.get('body', {})
-        all_receipts.append(rid)
 
         if body.get('typeWebhook') != 'incomingMessageReceived':
+            receipts_to_delete.append(rid)
             continue
 
         sender_data = body.get('senderData', {})
         chat_id = sender_data.get('chatId', '')
 
-        # רק קבוצות (מסתיימות ב-@g.us)
+        # רק קבוצות
         if not chat_id.endswith('@g.us'):
+            receipts_to_delete.append(rid)
             continue
 
         msg_data = body.get('messageData', {})
@@ -42,54 +43,59 @@ def get_last_group_message():
         group_name = sender_data.get('chatName', '')
 
         if text.strip():
-            # שומרים את האחרונה (כל איטרציה מחליפה)
-            last_message = {
+            messages.append({
                 'text': text,
                 'sender': sender_name,
-                'group': group_name
-            }
+                'group': group_name,
+                'receiptId': rid
+            })
+        else:
+            receipts_to_delete.append(rid)
 
-    return all_receipts, last_message
+    return messages, receipts_to_delete
 
-def upload_to_yemot(text, sender, group, token):
-    tts_text = f'{group} - {sender}: {text}' if sender else text
-    r = requests.post(
-        'https://www.call2all.co.il/ym/api/UploadFile',
-        params={'token': token, 'path': YEMOT_EXTENSION, 'tts': '1'},
-        files={'file': ('msg.txt', tts_text.encode('utf-8'), 'text/plain')},
-        timeout=20
-    )
-    return r.json()
-
-def delete_all(receipts):
-    for rid in receipts:
+def delete_receipts(receipt_ids):
+    for rid in receipt_ids:
         requests.delete(
             f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{rid}',
             timeout=10
         )
 
+def upload_to_yemot(text, sender, group, token):
+    tts_text = f'{sender}: {text}' if sender else text
+    r = requests.post(
+        'https://www.call2all.co.il/ym/api/UploadFile',
+        params={'token': token, 'path': YEMOT_EXTENSION, 'tts': '1', 'autoNumbering': '1'},
+        files={'file': ('msg.txt', tts_text.encode('utf-8'), 'text/plain')},
+        timeout=20
+    )
+    return r.json()
+
 def main():
     print('שולף הודעות מ-Green API...')
-    receipts, last_msg = get_last_group_message()
+    messages, to_delete = get_group_messages()
 
-    print(f'סה"כ הודעות בתור: {len(receipts)}')
+    # מוחקים הודעות שלא רלוונטיות
+    delete_receipts(to_delete)
 
-    # מוחקים את כל התור
-    delete_all(receipts)
-
-    if not last_msg:
+    if not messages:
         print('אין הודעות חדשות מקבוצות')
         return
 
-    print(f'הודעה אחרונה: [{last_msg["group"]}] {last_msg["sender"]}: {last_msg["text"][:50]}')
+    print(f'נמצאו {len(messages)} הודעות מקבוצות')
 
     r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
         'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
     }, timeout=10)
     token = r.json().get('token')
+    print('מחובר לימות המשיח')
 
-    result = upload_to_yemot(last_msg['text'], last_msg['sender'], last_msg['group'], token)
-    print(f'הועלה לימות: {result.get("path", "שגיאה")}')
+    # מעלים את כל ההודעות לפי סדר (autoNumbering מוסיף מספר עולה)
+    for msg in messages:
+        result = upload_to_yemot(msg['text'], msg['sender'], msg['group'], token)
+        print(f'הועלה: [{msg["group"]}] {msg["text"][:40]} → {result.get("path", "שגיאה")}')
+        # מוחקים מהתור אחרי העלאה מוצלחת
+        delete_receipts([msg['receiptId']])
 
     requests.get('https://www.call2all.co.il/ym/api/Logout', params={'token': token}, timeout=5)
     print('סיום ✅')
