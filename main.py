@@ -7,6 +7,9 @@ YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')
 
+# רק מהקבוצה הזו!
+ALLOWED_GROUP_ID = '120363425000018019@g.us'
+
 def get_messages():
     messages = []
     for _ in range(20):
@@ -19,18 +22,33 @@ def get_messages():
             break
         rid = d.get('receiptId')
         body = d.get('body', {})
+        
         if body.get('typeWebhook') != 'incomingMessageReceived':
             requests.delete(
                 f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{rid}',
                 timeout=10
             )
             continue
+
+        sender_data = body.get('senderData', {})
+        chat_id = sender_data.get('chatId', '')
+        
+        # סינון — רק מהקבוצה המאושרת
+        if chat_id != ALLOWED_GROUP_ID:
+            print(f'מדלג על הודעה מ-{chat_id} (לא הקבוצה)')
+            requests.delete(
+                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{rid}',
+                timeout=10
+            )
+            continue
+
         msg_data = body.get('messageData', {})
         text = (msg_data.get('textMessageData') or {}).get('textMessage', '') or \
                (msg_data.get('extendedTextMessageData') or {}).get('text', '')
-        sender = body.get('senderData', {}).get('senderName', '')
+        sender_name = sender_data.get('senderName', '')
+
         if text.strip():
-            messages.append({'text': text, 'sender': sender, 'receiptId': rid})
+            messages.append({'text': text, 'sender': sender_name, 'receiptId': rid})
         else:
             requests.delete(
                 f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{rid}',
@@ -53,22 +71,20 @@ def main():
     messages = get_messages()
     
     if not messages:
-        print('אין הודעות חדשות')
+        print('אין הודעות חדשות מהקבוצה')
         return
     
-    print(f'נמצאו {len(messages)} הודעות')
+    print(f'נמצאו {len(messages)} הודעות מהקבוצה')
     
-    # התחברות לימות
     r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
         'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
     }, timeout=10)
     token = r.json().get('token')
-    print(f'מחובר לימות המשיח')
+    print('מחובר לימות המשיח')
     
     for msg in messages:
         result = upload_to_yemot(msg['text'], msg['sender'], token)
         print(f'הועלה: {msg["text"][:40]} → {result.get("path", "שגיאה")}')
-        # מוחקים מהתור
         requests.delete(
             f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{msg["receiptId"]}',
             timeout=10
