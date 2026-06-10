@@ -1,12 +1,55 @@
 import requests
 import os
+import json
 import time
+from base64 import b64encode, b64decode
 
 GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
 GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
+STATE_FILE = 'state.json'
+
+def load_state():
+    """טוען את המצב האחרון מ-GitHub"""
+    try:
+        r = requests.get(
+            f'https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_FILE}',
+            headers={'Authorization': f'Bearer {GITHUB_TOKEN}'},
+            timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            content = b64decode(data['content']).decode('utf-8')
+            state = json.loads(content)
+            state['_sha'] = data['sha']
+            return state
+    except:
+        pass
+    return {'uploaded_ids': [], '_sha': None}
+
+def save_state(state):
+    """שומר את המצב ל-GitHub"""
+    try:
+        sha = state.pop('_sha', None)
+        content = b64encode(json.dumps(state).encode('utf-8')).decode('utf-8')
+        body = {
+            'message': 'Update state',
+            'content': content
+        }
+        if sha:
+            body['sha'] = sha
+        requests.put(
+            f'https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_FILE}',
+            headers={'Authorization': f'Bearer {GITHUB_TOKEN}'},
+            json=body,
+            timeout=10
+        )
+    except Exception as e:
+        print(f'שגיאה בשמירת state: {e}')
 
 def receive_notification():
     try:
@@ -25,8 +68,8 @@ def delete_receipt(rid):
             f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/deleteNotification/{GREEN_API_TOKEN}/{rid}',
             timeout=30
         )
-    except Exception as e:
-        print(f'שגיאה במחיקת receipt: {e}')
+    except:
+        pass
 
 def get_group_messages():
     messages = []
@@ -50,40 +93,21 @@ def get_group_messages():
                (msg_data.get('extendedTextMessageData') or {}).get('text', '')
         sender_name = sender_data.get('senderName', '')
         group_name = sender_data.get('chatName', '')
+        msg_id = body.get('idMessage', '') or str(rid)
+
         if text.strip():
-            messages.append({'text': text, 'sender': sender_name, 'group': group_name, 'receiptId': rid})
+            messages.append({
+                'text': text,
+                'sender': sender_name,
+                'group': group_name,
+                'receiptId': rid,
+                'id': msg_id
+            })
         else:
             to_delete.append(rid)
     return messages, to_delete
 
-def yemot_login():
-    r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
-        'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
-    }, timeout=15)
-    return r.json().get('token')
-
-def delete_all_tts_files(token):
-    """מוחק את כל קבצי ה-TTS הקיימים בשלוחה"""
-    deleted = 0
-    # מנסה למחוק עד 999
-    for i in range(0, 1000):
-        num = str(i).zfill(3)
-        path = f'{YEMOT_EXTENSION}/{num}.tts'
-        try:
-            r = requests.get('https://www.call2all.co.il/ym/api/DeleteFile', params={
-                'token': token, 'path': path
-            }, timeout=10)
-            res = r.json()
-            if res.get('responseStatus') == 'OK':
-                deleted += 1
-            elif deleted > 0:
-                # אם כבר מחקנו כמה וקיבלנו שגיאה - סימן שנגמרו הקבצים
-                break
-        except:
-            pass
-    return deleted
-
-def upload_to_yemot(text, sender, group, token):
+def upload_to_yemot(text, sender, token):
     try:
         tts_text = f'{sender}: {text}' if sender else text
         r = requests.post(
@@ -98,6 +122,11 @@ def upload_to_yemot(text, sender, group, token):
         return {}
 
 def main():
+    print('טוען מצב קודם...')
+    state = load_state()
+    uploaded_ids = set(state.get('uploaded_ids', []))
+    print(f'כבר הועלו: {len(uploaded_ids)} הודעות')
+
     print('שולף הודעות מ-Green API...')
     messages, to_delete = get_group_messages()
 
@@ -105,33 +134,52 @@ def main():
         delete_receipt(rid)
         time.sleep(0.1)
 
-    if not messages:
-        print('אין הודעות חדשות מקבוצות')
+    # מסנן רק הודעות שלא הועלו עדיין
+    new_messages = [m for m in messages if m['id'] not in uploaded_ids]
+
+    if not new_messages:
+        print('אין הודעות חדשות להעלאה')
+        # עדיין מוחקים מהתור
+        for msg in messages:
+            delete_receipt(msg['receiptId'])
         return
 
-    print(f'נמצאו {len(messages)} הודעות חדשות')
+    print(f'נמצאו {len(new_messages)} הודעות חדשות (מתוך {len(messages)} בתור)')
 
-    token = yemot_login()
-    print('מחובר לימות המשיח')
+    try:
+        r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
+            'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
+        }, timeout=15)
+        token = r.json().get('token')
+        print('מחובר לימות המשיח')
+    except Exception as e:
+        print(f'שגיאה בהתחברות לימות: {e}')
+        return
 
-    # מוחק את כל הקבצים הישנים לפני העלאה
-    deleted = delete_all_tts_files(token)
-    print(f'נמחקו {deleted} קבצים ישנים')
-
-    # מעלה את ההודעות החדשות מהישנה לחדשה (כך start=max יראה האחרונה ראשון)
-    for msg in messages:
-        result = upload_to_yemot(msg['text'], msg['sender'], msg['group'], token)
-        path = result.get('path', 'שגיאה')
-        print(f'הועלה: [{msg["group"]}] {msg["text"][:40]} → {path}')
+    newly_uploaded = []
+    for msg in new_messages:
+        result = upload_to_yemot(msg['text'], msg['sender'], token)
+        path = result.get('path', '')
+        if path:
+            print(f'הועלה: [{msg["group"]}] {msg["text"][:40]} → {path}')
+            newly_uploaded.append(msg['id'])
+        else:
+            print(f'שגיאה בהעלאה: {msg["text"][:40]}')
         delete_receipt(msg['receiptId'])
         time.sleep(0.1)
+
+    # שומר IDs שהועלו (שומר רק 500 אחרונים כדי לא לתפוח)
+    all_ids = list(uploaded_ids) + newly_uploaded
+    state['uploaded_ids'] = all_ids[-500:]
+    state['_sha'] = state.get('_sha')
+    save_state(state)
 
     try:
         requests.get('https://www.call2all.co.il/ym/api/Logout', params={'token': token}, timeout=10)
     except:
         pass
 
-    print('סיום ✅')
+    print(f'סיום ✅ הועלו {len(newly_uploaded)} הודעות חדשות')
 
 if __name__ == '__main__':
     main()
