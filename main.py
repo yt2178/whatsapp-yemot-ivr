@@ -26,50 +26,62 @@ def delete_receipt(rid):
             timeout=30
         )
     except Exception as e:
-        print(f'שגיאה במחיקת receipt {rid}: {e}')
+        print(f'שגיאה במחיקת receipt: {e}')
 
 def get_group_messages():
     messages = []
     to_delete = []
-
     for _ in range(50):
         d = receive_notification()
-        if d is None:
+        if d is None or not d:
             break
-        if not d:
-            break
-
         rid = d.get('receiptId')
         body = d.get('body', {})
-
         if body.get('typeWebhook') != 'incomingMessageReceived':
             to_delete.append(rid)
             continue
-
         sender_data = body.get('senderData', {})
         chat_id = sender_data.get('chatId', '')
-
         if not chat_id.endswith('@g.us'):
             to_delete.append(rid)
             continue
-
         msg_data = body.get('messageData', {})
         text = (msg_data.get('textMessageData') or {}).get('textMessage', '') or \
                (msg_data.get('extendedTextMessageData') or {}).get('text', '')
         sender_name = sender_data.get('senderName', '')
         group_name = sender_data.get('chatName', '')
-
         if text.strip():
-            messages.append({
-                'text': text,
-                'sender': sender_name,
-                'group': group_name,
-                'receiptId': rid
-            })
+            messages.append({'text': text, 'sender': sender_name, 'group': group_name, 'receiptId': rid})
         else:
             to_delete.append(rid)
-
     return messages, to_delete
+
+def yemot_login():
+    r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
+        'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
+    }, timeout=15)
+    return r.json().get('token')
+
+def delete_all_tts_files(token):
+    """מוחק את כל קבצי ה-TTS הקיימים בשלוחה"""
+    deleted = 0
+    # מנסה למחוק עד 999
+    for i in range(0, 1000):
+        num = str(i).zfill(3)
+        path = f'{YEMOT_EXTENSION}/{num}.tts'
+        try:
+            r = requests.get('https://www.call2all.co.il/ym/api/DeleteFile', params={
+                'token': token, 'path': path
+            }, timeout=10)
+            res = r.json()
+            if res.get('responseStatus') == 'OK':
+                deleted += 1
+            elif deleted > 0:
+                # אם כבר מחקנו כמה וקיבלנו שגיאה - סימן שנגמרו הקבצים
+                break
+        except:
+            pass
+    return deleted
 
 def upload_to_yemot(text, sender, group, token):
     try:
@@ -89,7 +101,6 @@ def main():
     print('שולף הודעות מ-Green API...')
     messages, to_delete = get_group_messages()
 
-    # מוחקים לא רלוונטיים
     for rid in to_delete:
         delete_receipt(rid)
         time.sleep(0.1)
@@ -98,18 +109,16 @@ def main():
         print('אין הודעות חדשות מקבוצות')
         return
 
-    print(f'נמצאו {len(messages)} הודעות מקבוצות')
+    print(f'נמצאו {len(messages)} הודעות חדשות')
 
-    try:
-        r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
-            'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD
-        }, timeout=15)
-        token = r.json().get('token')
-        print('מחובר לימות המשיח')
-    except Exception as e:
-        print(f'שגיאה בהתחברות לימות: {e}')
-        return
+    token = yemot_login()
+    print('מחובר לימות המשיח')
 
+    # מוחק את כל הקבצים הישנים לפני העלאה
+    deleted = delete_all_tts_files(token)
+    print(f'נמחקו {deleted} קבצים ישנים')
+
+    # מעלה את ההודעות החדשות מהישנה לחדשה (כך start=max יראה האחרונה ראשון)
     for msg in messages:
         result = upload_to_yemot(msg['text'], msg['sender'], msg['group'], token)
         path = result.get('path', 'שגיאה')
