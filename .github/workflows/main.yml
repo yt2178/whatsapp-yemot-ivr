@@ -26,4 +26,5 @@ jobs:
           YEMOT_USERNAME: ${{ secrets.YEMOT_USERNAME }}
           YEMOT_PASSWORD: ${{ secrets.YEMOT_PASSWORD }}
           YEMOT_EXTENSION: ${{ secrets.YEMOT_EXTENSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python main.py
