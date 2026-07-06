@@ -8,7 +8,9 @@ GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
 GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
-YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')
+YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')       # כל ההודעות
+YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:2')  # רק חדשות שלא נשמעו
+RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו (לעצמך/לכל צ'אט) כדי לאפס את "החדשות"
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
@@ -16,7 +18,6 @@ HISTORY_MINUTES = int(os.environ.get('HISTORY_MINUTES', '10080'))  # 7 days back
 TEXT_TYPES = ('textMessage', 'extendedTextMessage')
 
 def load_state():
-    """טוען את המצב האחרון מ-GitHub"""
     try:
         r = requests.get(
             f'https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_FILE}',
@@ -31,10 +32,9 @@ def load_state():
             return state
     except Exception as e:
         print(f'שגיאה בטעינת state: {e}')
-    return {'uploaded_ids': [], '_sha': None}
+    return {'uploaded_ids': [], 'unheard_ids': [], '_sha': None}
 
 def save_state(state):
-    """שומר את המצב ל-GitHub"""
     try:
         sha = state.pop('_sha', None)
         content = b64encode(json.dumps(state).encode('utf-8')).decode('utf-8')
@@ -71,7 +71,6 @@ def delete_receipt(rid):
         pass
 
 def fetch_queue_messages():
-    """קורא הודעות בזמן אמת מהתור (קבוצות + פרטי + הודעות שאני שולח)"""
     messages = []
     for _ in range(50):
         d = receive_notification()
@@ -107,16 +106,15 @@ def fetch_queue_messages():
 
         messages.append({
             'id': msg_id, 'text': text, 'sender': sender_name,
-            'group': chat_name, 'timestamp': timestamp, 'receiptId': rid
+            'group': chat_name, 'timestamp': timestamp, 'receiptId': rid,
+            'is_outgoing': is_outgoing
         })
         delete_receipt(rid)
         time.sleep(0.1)
     return messages
 
 def fetch_history_messages(minutes=HISTORY_MINUTES):
-    """מגבה היסטוריה - הודעות נכנסות (קבוצות+פרטי) והודעות יוצאות (ששלחתי בעצמי)"""
     messages = []
-
     try:
         r = requests.get(
             f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/lastIncomingMessages/{GREEN_API_TOKEN}',
@@ -131,7 +129,7 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             messages.append({
                 'id': m.get('idMessage', ''), 'text': text,
                 'sender': m.get('senderName', ''), 'group': m.get('chatId', ''),
-                'timestamp': m.get('timestamp', 0)
+                'timestamp': m.get('timestamp', 0), 'is_outgoing': False
             })
     except Exception as e:
         print(f'שגיאה בשליפת היסטוריה נכנסת: {e}')
@@ -150,32 +148,45 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             messages.append({
                 'id': m.get('idMessage', ''), 'text': text,
                 'sender': 'אני', 'group': m.get('chatId', ''),
-                'timestamp': m.get('timestamp', 0)
+                'timestamp': m.get('timestamp', 0), 'is_outgoing': True
             })
     except Exception as e:
         print(f'שגיאה בשליפת היסטוריה יוצאת: {e}')
 
     return messages
 
-def upload_to_yemot(text, sender, token):
+def upload_to_yemot(text, sender, token, path):
     try:
         tts_text = f'{sender}: {text}' if sender else text
         r = requests.post(
             'https://www.call2all.co.il/ym/api/UploadFile',
-            params={'token': token, 'path': YEMOT_EXTENSION, 'tts': '1', 'autoNumbering': '1'},
+            params={'token': token, 'path': path, 'tts': '1', 'autoNumbering': '1'},
             files={'file': ('msg.txt', tts_text.encode('utf-8'), 'text/plain')},
             timeout=30
         )
         return r.json()
     except Exception as e:
-        print(f'שגיאה בהעלאה לימות: {e}')
+        print(f'שגיאה בהעלאה לימות ({path}): {e}')
         return {}
+
+def clear_new_folder(token):
+    """מוחק את כל תיקיית ה'חדשות' - נקרא כשהמשתמש מסמן שכבר שמע"""
+    try:
+        r = requests.get(
+            'https://www.call2all.co.il/ym/api/FileAction',
+            params={'token': token, 'path': YEMOT_EXTENSION_NEW, 'action': 'delete'},
+            timeout=30
+        )
+        print(f'איפוס תיקיית חדשות: {r.text[:200]}')
+    except Exception as e:
+        print(f'שגיאה באיפוס תיקיית חדשות: {e}')
 
 def main():
     print('טוען מצב קודם...')
     state = load_state()
     uploaded_ids = set(state.get('uploaded_ids', []))
-    print(f'כבר הועלו: {len(uploaded_ids)} הודעות')
+    unheard_ids = set(state.get('unheard_ids', []))
+    print(f'כבר הועלו: {len(uploaded_ids)} הודעות, ממתינות כ"חדש": {len(unheard_ids)}')
 
     print('שולף הודעות מהתור בזמן אמת...')
     try:
@@ -184,7 +195,7 @@ def main():
         print(f'שגיאה בשליפת תור: {e}')
         queue_msgs = []
 
-    print(f'שולף היסטוריה (עד {HISTORY_MINUTES} דקות אחורה, כולל פרטי + קבוצות + הודעות שלי)...')
+    print(f'שולף היסטוריה (עד {HISTORY_MINUTES} דקות אחורה)...')
     try:
         history_msgs = fetch_history_messages()
     except Exception as e:
@@ -197,14 +208,17 @@ def main():
             all_msgs[m['id']] = m
 
     new_messages = [m for m in all_msgs.values() if m['id'] not in uploaded_ids]
-    # ממיינים מהישן לחדש -> ההודעה החדשה ביותר תקבל את המספר הגבוה ביותר בימות (start=max = תושמע ראשונה)
-    new_messages.sort(key=lambda m: m.get('timestamp', 0))
+    new_messages.sort(key=lambda m: m.get('timestamp', 0))  # מהישן לחדש
 
-    if not new_messages:
-        print('אין הודעות חדשות להעלאה')
-        return
-
-    print(f'נמצאו {len(new_messages)} הודעות חדשות')
+    # מזהים פקודת איפוס (הודעה עצמית עם המילה המדויקת) - לא מעלים אותה כתוכן
+    reset_requested = False
+    content_messages = []
+    for m in new_messages:
+        if m.get('is_outgoing') and m['text'].strip() == RESET_KEYWORD:
+            reset_requested = True
+            uploaded_ids.add(m['id'])  # מסמנים כמטופלת כדי שלא תיבדק שוב
+        else:
+            content_messages.append(m)
 
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
@@ -216,22 +230,49 @@ def main():
         print(f'שגיאה בהתחברות לימות: {e}')
         return
 
-    newly_uploaded = []
-    for msg in new_messages:
+    if reset_requested:
+        print(f'זוהתה פקודת איפוס ("{RESET_KEYWORD}") - מנקה תיקיית חדשות')
+        clear_new_folder(token)
+        unheard_ids = set()
+
+    if not content_messages:
+        print('אין הודעות חדשות להעלאה')
+        state['uploaded_ids'] = list(uploaded_ids)[-1000:]
+        state['unheard_ids'] = list(unheard_ids)[-1000:]
+        save_state(state)
         try:
-            result = upload_to_yemot(msg['text'], msg['sender'], token)
+            requests.get('https://www.call2all.co.il/ym/api/Logout', params={'token': token}, timeout=30)
+        except Exception:
+            pass
+        return
+
+    print(f'נמצאו {len(content_messages)} הודעות חדשות')
+
+    newly_uploaded = []
+    for msg in content_messages:
+        try:
+            # מעלים לתיקיית "כל ההודעות"
+            result = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION)
             path = result.get('path', '')
             if path:
-                print(f'הועלה: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
+                print(f'הועלה [הכל]: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
                 newly_uploaded.append(msg['id'])
             else:
-                print(f'שגיאה בהעלאה: {msg["text"][:40]}')
+                print(f'שגיאה בהעלאה לתיקיית הכל: {msg["text"][:40]}')
+                continue
+
+            # מעלים גם לתיקיית "חדש - לא נשמע"
+            result2 = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION_NEW)
+            path2 = result2.get('path', '')
+            if path2:
+                unheard_ids.add(msg['id'])
         except Exception as e:
             print(f'שגיאה בהעלאת הודעה: {e}')
         time.sleep(0.1)
 
     all_ids = list(uploaded_ids) + newly_uploaded
     state['uploaded_ids'] = all_ids[-1000:]
+    state['unheard_ids'] = list(unheard_ids)[-1000:]
     save_state(state)
 
     try:
@@ -239,7 +280,7 @@ def main():
     except Exception:
         pass
 
-    print(f'סיום ✅ הועלו {len(newly_uploaded)} הודעות חדשות')
+    print(f'סיום ✅ הועלו {len(newly_uploaded)} הודעות חדשות (ל-2 השלוחות)')
 
 if __name__ == '__main__':
     main()
