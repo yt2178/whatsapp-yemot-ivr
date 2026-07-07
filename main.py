@@ -8,9 +8,10 @@ GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
 GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
-YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')       # כל ההודעות
+YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')          # כל ההודעות
 YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:2')  # רק חדשות שלא נשמעו
-RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו (לעצמך/לכל צ'אט) כדי לאפס את "החדשות"
+YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:3')  # הקלטות לשליחה לוואטסאפ
+RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
@@ -32,7 +33,7 @@ def load_state():
             return state
     except Exception as e:
         print(f'שגיאה בטעינת state: {e}')
-    return {'uploaded_ids': [], 'unheard_ids': [], '_sha': None}
+    return {'uploaded_ids': [], 'unheard_ids': [], 'sent_recordings': [], '_sha': None}
 
 def save_state(state):
     try:
@@ -181,11 +182,73 @@ def clear_new_folder(token):
     except Exception as e:
         print(f'שגיאה באיפוס תיקיית חדשות: {e}')
 
+def normalize_phone(raw_digits):
+    """הופך מספר שהוקלד (למשל 0501234567) לפורמט בינלאומי לוואטסאפ (972501234567)"""
+    digits = ''.join(c for c in raw_digits if c.isdigit())
+    if digits.startswith('0'):
+        digits = '972' + digits[1:]
+    elif not digits.startswith('972'):
+        digits = '972' + digits
+    return digits
+
+def check_and_send_recordings(token, sent_recordings):
+    """בודק אם יש הקלטות חדשות בשלוחת ההקלטה, ושולח אותן לוואטסאפ לפי המספר שהוקלד כשם הקובץ"""
+    try:
+        r = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                          params={'token': token, 'path': YEMOT_EXTENSION_RECORD}, timeout=30)
+        data = r.json()
+        files = data.get('files', [])
+    except Exception as e:
+        print(f'שגיאה בבדיקת שלוחת הקלטות: {e}')
+        return sent_recordings
+
+    for f in files:
+        uid = f.get('uniqueId', '')
+        name = f.get('name', '')
+        if not uid or uid in sent_recordings:
+            continue
+
+        phone_raw = name.split('.')[0]
+        if not phone_raw.isdigit() or len(phone_raw) < 8:
+            print(f'שם קובץ לא נראה כמו מספר טלפון, מדלג: {name}')
+            sent_recordings.add(uid)
+            continue
+
+        chat_id = normalize_phone(phone_raw) + '@c.us'
+        file_path = f'{YEMOT_EXTENSION_RECORD}/{name}'
+
+        try:
+            dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                               params={'token': token, 'path': file_path}, timeout=30)
+            if dl.status_code != 200 or not dl.content:
+                print(f'שגיאה בהורדת הקלטה {name}')
+                continue
+
+            files_payload = {'file': (name, dl.content, 'audio/wav')}
+            data_payload = {'chatId': chat_id, 'caption': 'הודעה קולית חדשה מהקו'}
+            sr = requests.post(
+                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
+                data=data_payload, files=files_payload, timeout=30
+            )
+            if sr.status_code == 200 and sr.json().get('idMessage'):
+                print(f'הקלטה נשלחה בהצלחה ל-{chat_id}: {name}')
+                sent_recordings.add(uid)
+                # מוחקים את הקובץ מהשלוחה כדי לפנות את השם למקרה הבא ולמנוע שליחה כפולה
+                requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                             params={'token': token, 'path': file_path, 'action': 'delete'}, timeout=30)
+            else:
+                print(f'שגיאה בשליחת הקלטה ל-{chat_id}: {sr.text[:200]}')
+        except Exception as e:
+            print(f'שגיאה בטיפול בהקלטה {name}: {e}')
+
+    return sent_recordings
+
 def main():
     print('טוען מצב קודם...')
     state = load_state()
     uploaded_ids = set(state.get('uploaded_ids', []))
     unheard_ids = set(state.get('unheard_ids', []))
+    sent_recordings = set(state.get('sent_recordings', []))
     print(f'כבר הועלו: {len(uploaded_ids)} הודעות, ממתינות כ"חדש": {len(unheard_ids)}')
 
     print('שולף הודעות מהתור בזמן אמת...')
@@ -216,7 +279,7 @@ def main():
     for m in new_messages:
         if m.get('is_outgoing') and m['text'].strip() == RESET_KEYWORD:
             reset_requested = True
-            uploaded_ids.add(m['id'])  # מסמנים כמטופלת כדי שלא תיבדק שוב
+            uploaded_ids.add(m['id'])
         else:
             content_messages.append(m)
 
@@ -235,44 +298,40 @@ def main():
         clear_new_folder(token)
         unheard_ids = set()
 
-    if not content_messages:
+    if content_messages:
+        print(f'נמצאו {len(content_messages)} הודעות חדשות')
+        newly_uploaded = []
+        for msg in content_messages:
+            try:
+                result = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION)
+                path = result.get('path', '')
+                if path:
+                    print(f'הועלה [הכל]: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
+                    newly_uploaded.append(msg['id'])
+                else:
+                    print(f'שגיאה בהעלאה לתיקיית הכל: {msg["text"][:40]}')
+                    continue
+
+                result2 = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION_NEW)
+                if result2.get('path'):
+                    unheard_ids.add(msg['id'])
+            except Exception as e:
+                print(f'שגיאה בהעלאת הודעה: {e}')
+            time.sleep(0.1)
+
+        uploaded_ids.update(newly_uploaded)
+    else:
         print('אין הודעות חדשות להעלאה')
-        state['uploaded_ids'] = list(uploaded_ids)[-1000:]
-        state['unheard_ids'] = list(unheard_ids)[-1000:]
-        save_state(state)
-        try:
-            requests.get('https://www.call2all.co.il/ym/api/Logout', params={'token': token}, timeout=30)
-        except Exception:
-            pass
-        return
 
-    print(f'נמצאו {len(content_messages)} הודעות חדשות')
+    print('בודק הקלטות חדשות לשליחה לוואטסאפ...')
+    try:
+        sent_recordings = check_and_send_recordings(token, sent_recordings)
+    except Exception as e:
+        print(f'שגיאה כללית בבדיקת הקלטות: {e}')
 
-    newly_uploaded = []
-    for msg in content_messages:
-        try:
-            # מעלים לתיקיית "כל ההודעות"
-            result = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION)
-            path = result.get('path', '')
-            if path:
-                print(f'הועלה [הכל]: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
-                newly_uploaded.append(msg['id'])
-            else:
-                print(f'שגיאה בהעלאה לתיקיית הכל: {msg["text"][:40]}')
-                continue
-
-            # מעלים גם לתיקיית "חדש - לא נשמע"
-            result2 = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION_NEW)
-            path2 = result2.get('path', '')
-            if path2:
-                unheard_ids.add(msg['id'])
-        except Exception as e:
-            print(f'שגיאה בהעלאת הודעה: {e}')
-        time.sleep(0.1)
-
-    all_ids = list(uploaded_ids) + newly_uploaded
-    state['uploaded_ids'] = all_ids[-1000:]
+    state['uploaded_ids'] = list(uploaded_ids)[-1000:]
     state['unheard_ids'] = list(unheard_ids)[-1000:]
+    state['sent_recordings'] = list(sent_recordings)[-500:]
     save_state(state)
 
     try:
@@ -280,7 +339,7 @@ def main():
     except Exception:
         pass
 
-    print(f'סיום ✅ הועלו {len(newly_uploaded)} הודעות חדשות (ל-2 השלוחות)')
+    print('סיום ✅')
 
 if __name__ == '__main__':
     main()
