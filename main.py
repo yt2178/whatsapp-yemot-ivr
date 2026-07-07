@@ -11,6 +11,7 @@ YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')          # כל ההודעות
 YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:2')  # רק חדשות שלא נשמעו
 YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:3')  # הקלטות לשליחה לוואטסאפ
+YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות
 RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
@@ -182,6 +183,33 @@ def clear_new_folder(token):
     except Exception as e:
         print(f'שגיאה באיפוס תיקיית חדשות: {e}')
 
+def check_phone_reset(token):
+    """בודק אם מישהו חייג לשלוחת האיפוס הטלפונית (ivr2:5) - אם כן, מאפס את תיקיית החדשות ומנקה את שלוחת האיפוס"""
+    try:
+        r = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                          params={'token': token, 'path': YEMOT_EXTENSION_RESET}, timeout=30)
+        files = r.json().get('files', [])
+    except Exception as e:
+        print(f'שגיאה בבדיקת שלוחת איפוס טלפוני: {e}')
+        return False
+
+    if not files:
+        return False
+
+    print(f'זוהה איפוס דרך הקו ({len(files)} קבצי טריגר) - מנקה תיקיית חדשות')
+    clear_new_folder(token)
+    try:
+        requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                     params={'token': token, 'path': YEMOT_EXTENSION_RESET, 'action': 'delete'}, timeout=30)
+        # משחזרים את הגדרות השלוחה כי מחיקת התיקייה מוחקת גם את ה-ext.ini שלה
+        requests.get('https://www.call2all.co.il/ym/api/UpdateExtension', params={
+            'token': token, 'path': YEMOT_EXTENSION_RESET, 'type': 'record', 'title': 'איפוס הודעות חדשות',
+            'record_ok': '#', 'say_record_number': 'no', 'option_record': '-1-',
+        }, timeout=30)
+    except Exception as e:
+        print(f'שגיאה בניקוי שלוחת איפוס טלפוני: {e}')
+    return True
+
 def normalize_phone(raw_digits):
     """הופך מספר שהוקלד (למשל 0501234567) לפורמט בינלאומי לוואטסאפ (972501234567)"""
     digits = ''.join(c for c in raw_digits if c.isdigit())
@@ -328,6 +356,13 @@ def main():
         sent_recordings = check_and_send_recordings(token, sent_recordings)
     except Exception as e:
         print(f'שגיאה כללית בבדיקת הקלטות: {e}')
+
+    print('בודק איפוס דרך הקו...')
+    try:
+        if check_phone_reset(token):
+            unheard_ids = set()
+    except Exception as e:
+        print(f'שגיאה כללית בבדיקת איפוס טלפוני: {e}')
 
     state['uploaded_ids'] = list(uploaded_ids)[-1000:]
     state['unheard_ids'] = list(unheard_ids)[-1000:]
