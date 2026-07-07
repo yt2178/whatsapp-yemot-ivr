@@ -172,7 +172,7 @@ def upload_to_yemot(text, sender, token, path):
         return {}
 
 def clear_new_folder(token):
-    """מוחק את כל תיקיית ה'חדשות' - נקרא כשהמשתמש מסמן שכבר שמע"""
+    """מוחק את כל תיקיית ה'חדשות' - נקרא כשהמשתמש מסמן שכבר שמע, ומשחזר את הגדרות השלוחה"""
     try:
         r = requests.get(
             'https://www.call2all.co.il/ym/api/FileAction',
@@ -180,6 +180,10 @@ def clear_new_folder(token):
             timeout=30
         )
         print(f'איפוס תיקיית חדשות: {r.text[:200]}')
+        # מחיקת התיקייה מוחקת גם את ה-ext.ini שלה - משחזרים את ההגדרות
+        requests.get('https://www.call2all.co.il/ym/api/UpdateExtension', params={
+            'token': token, 'path': YEMOT_EXTENSION_NEW, 'type': 'playfile', 'title': 'הודעות חדשות',
+        }, timeout=30)
     except Exception as e:
         print(f'שגיאה באיפוס תיקיית חדשות: {e}')
 
