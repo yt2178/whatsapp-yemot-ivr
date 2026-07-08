@@ -14,6 +14,7 @@ YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:3')  # �
 YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות
 RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
 TZINTUK_LIST = os.environ.get('TZINTUK_LIST', 'yt2178whatsapp')  # שם רשימת הצינתוקים החינמית (ivr2:6 = שלוחת הרשמה)
+OWN_CHAT_ID = os.environ.get('OWN_CHAT_ID', '972526751178@c.us')  # הצ'אט עם עצמי (הודעות עצמיות) - תמיד נכלל במלואו
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
@@ -325,8 +326,15 @@ def main():
         if m.get('is_outgoing') and m['text'].strip() == RESET_KEYWORD:
             reset_requested = True
             uploaded_ids.add(m['id'])
-        else:
-            content_messages.append(m)
+            continue
+
+        group = m.get('group', '')
+        # בצ'אט פרטי (לא קבוצה): בצ'אט עם עצמי - מעלים הכל. בצ'אט עם אדם אחר - מעלים רק את ההודעות שהוא שלח (לא את מה ששלחתי אני)
+        if group.endswith('@c.us') and group != OWN_CHAT_ID and m.get('is_outgoing'):
+            uploaded_ids.add(m['id'])  # מסמנים כמטופל כדי שלא ניבדק שוב, אבל לא מעלים לימות
+            continue
+
+        content_messages.append(m)
 
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/Login', params={
