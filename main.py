@@ -368,7 +368,7 @@ def main():
 
         # בדיקה אם בין ההודעות החדשות יש הודעה פרטית נכנסת (לא מקבוצה, לא מאיתנו) - אם כן, מצנתקים
         has_new_private = any(
-            (not m.get('is_outgoing')) and m.get('group', '').endswith('@c.us')
+            m.get('group', '').endswith('@c.us')
             for m in content_messages if m['id'] in newly_uploaded
         )
         if has_new_private and TZINTUK_LIST:
