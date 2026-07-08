@@ -13,7 +13,7 @@ YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:2')  # רק ח
 YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:3')  # הקלטות לשליחה לוואטסאפ
 YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות
 RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
-TZINTUK_PHONE = os.environ.get('TZINTUK_PHONE', '')  # מספר לצלצל אליו כשמגיעה הודעה פרטית (לא קבוצה)
+TZINTUK_LIST = os.environ.get('TZINTUK_LIST', 'yt2178whatsapp')  # שם רשימת הצינתוקים החינמית (ivr2:6 = שלוחת הרשמה)
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
@@ -224,15 +224,15 @@ def normalize_phone(raw_digits):
         digits = '972' + digits
     return digits
 
-def trigger_tzintuk(token, phone):
-    """מפעיל שיחת צינתוק קצרה למספר שהוגדר - התראה שהגיעה הודעה פרטית חדשה"""
-    if not phone:
+def trigger_tzintuk(token, list_name):
+    """מפעיל צינתוק חינמי (ללא עלות יחידות) לכל מי שרשום ברשימת הצינתוקים - התראה על הודעה פרטית חדשה"""
+    if not list_name:
         return
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/RunTzintuk', params={
-            'token': token, 'phones': phone, 'TzintukTimeOut': '15'
+            'token': token, 'phones': f'tzl:{list_name}', 'TzintukTimeOut': '15'
         }, timeout=30)
-        print(f'צינתוק נשלח ל-{phone}: {r.text[:200]}')
+        print(f'צינתוק חינמי נשלח לרשימה {list_name}: {r.text[:200]}')
     except Exception as e:
         print(f'שגיאה בשליחת צינתוק: {e}')
 
@@ -371,9 +371,9 @@ def main():
             (not m.get('is_outgoing')) and m.get('group', '').endswith('@c.us')
             for m in content_messages if m['id'] in newly_uploaded
         )
-        if has_new_private and TZINTUK_PHONE:
-            print('זוהתה הודעה פרטית חדשה - מפעיל צינתוק')
-            trigger_tzintuk(token, TZINTUK_PHONE)
+        if has_new_private and TZINTUK_LIST:
+            print('זוהתה הודעה פרטית חדשה - מפעיל צינתוק חינמי')
+            trigger_tzintuk(token, TZINTUK_LIST)
     else:
         print('אין הודעות חדשות להעלאה')
 
