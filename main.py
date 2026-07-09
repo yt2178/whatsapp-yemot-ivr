@@ -2,6 +2,8 @@ import requests
 import os
 import json
 import time
+import tempfile
+import subprocess
 from base64 import b64encode, b64decode
 
 GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
@@ -20,6 +22,7 @@ GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
 HISTORY_MINUTES = int(os.environ.get('HISTORY_MINUTES', '10080'))  # 7 days back-fill
 TEXT_TYPES = ('textMessage', 'extendedTextMessage')
+MEDIA_TYPES = ('audioMessage', 'videoMessage')  # הודעות קוליות וסרטונים
 
 def load_state():
     try:
@@ -74,6 +77,14 @@ def delete_receipt(rid):
     except Exception:
         pass
 
+def _media_entry(msg_id, media_kind, sender, chat_name, timestamp, is_outgoing, download_url, mime_type, caption):
+    return {
+        'id': msg_id, 'type': 'media', 'media_kind': media_kind,
+        'text': caption or '', 'sender': sender, 'group': chat_name,
+        'timestamp': timestamp, 'is_outgoing': is_outgoing,
+        'download_url': download_url, 'mime_type': mime_type or ''
+    }
+
 def fetch_queue_messages():
     messages = []
     for _ in range(50):
@@ -90,6 +101,29 @@ def fetch_queue_messages():
 
         msg_data = body.get('messageData', {})
         type_msg = msg_data.get('typeMessage', '')
+        sender_data = body.get('senderData', {})
+        chat_id = sender_data.get('chatId', '')
+        chat_name = sender_data.get('chatName', '') or chat_id
+        is_outgoing = webhook_type == 'outgoingMessageReceived'
+        sender_name = 'אני' if is_outgoing else sender_data.get('senderName', '')
+        msg_id = body.get('idMessage', '') or str(rid)
+        timestamp = body.get('timestamp', 0)
+
+        if type_msg in MEDIA_TYPES:
+            file_data = msg_data.get('fileMessageData', {}) or {}
+            download_url = file_data.get('downloadUrl', '')
+            if not download_url:
+                delete_receipt(rid)
+                continue
+            media_kind = 'audio' if type_msg == 'audioMessage' else 'video'
+            messages.append(_media_entry(
+                msg_id, media_kind, sender_name, chat_name, timestamp, is_outgoing,
+                download_url, file_data.get('mimeType', ''), file_data.get('caption', '')
+            ))
+            delete_receipt(rid)
+            time.sleep(0.1)
+            continue
+
         if type_msg not in TEXT_TYPES:
             delete_receipt(rid)
             continue
@@ -100,16 +134,8 @@ def fetch_queue_messages():
             delete_receipt(rid)
             continue
 
-        sender_data = body.get('senderData', {})
-        chat_id = sender_data.get('chatId', '')
-        chat_name = sender_data.get('chatName', '') or chat_id
-        is_outgoing = webhook_type == 'outgoingMessageReceived'
-        sender_name = 'אני' if is_outgoing else sender_data.get('senderName', '')
-        msg_id = body.get('idMessage', '') or str(rid)
-        timestamp = body.get('timestamp', 0)
-
         messages.append({
-            'id': msg_id, 'text': text, 'sender': sender_name,
+            'id': msg_id, 'type': 'text', 'text': text, 'sender': sender_name,
             'group': chat_name, 'timestamp': timestamp, 'receiptId': rid,
             'is_outgoing': is_outgoing
         })
@@ -125,13 +151,24 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             params={'minutes': minutes}, timeout=30
         )
         for m in r.json():
-            if m.get('typeMessage', '') not in TEXT_TYPES:
+            type_msg = m.get('typeMessage', '')
+            if type_msg in MEDIA_TYPES:
+                download_url = m.get('downloadUrl') or (m.get('fileMessageData') or {}).get('downloadUrl', '')
+                if not download_url:
+                    continue
+                media_kind = 'audio' if type_msg == 'audioMessage' else 'video'
+                messages.append(_media_entry(
+                    m.get('idMessage', ''), media_kind, m.get('senderName', ''), m.get('chatId', ''),
+                    m.get('timestamp', 0), False, download_url, m.get('mimeType', ''), m.get('caption', '')
+                ))
+                continue
+            if type_msg not in TEXT_TYPES:
                 continue
             text = m.get('textMessage') or (m.get('extendedTextMessageData') or {}).get('text', '')
             if not text.strip():
                 continue
             messages.append({
-                'id': m.get('idMessage', ''), 'text': text,
+                'id': m.get('idMessage', ''), 'type': 'text', 'text': text,
                 'sender': m.get('senderName', ''), 'group': m.get('chatId', ''),
                 'timestamp': m.get('timestamp', 0), 'is_outgoing': False
             })
@@ -144,13 +181,24 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             params={'minutes': minutes}, timeout=30
         )
         for m in r2.json():
-            if m.get('typeMessage', '') not in TEXT_TYPES:
+            type_msg = m.get('typeMessage', '')
+            if type_msg in MEDIA_TYPES:
+                download_url = m.get('downloadUrl') or (m.get('fileMessageData') or {}).get('downloadUrl', '')
+                if not download_url:
+                    continue
+                media_kind = 'audio' if type_msg == 'audioMessage' else 'video'
+                messages.append(_media_entry(
+                    m.get('idMessage', ''), media_kind, 'אני', m.get('chatId', ''),
+                    m.get('timestamp', 0), True, download_url, m.get('mimeType', ''), m.get('caption', '')
+                ))
+                continue
+            if type_msg not in TEXT_TYPES:
                 continue
             text = m.get('textMessage') or (m.get('extendedTextMessageData') or {}).get('text', '')
             if not text.strip():
                 continue
             messages.append({
-                'id': m.get('idMessage', ''), 'text': text,
+                'id': m.get('idMessage', ''), 'type': 'text', 'text': text,
                 'sender': 'אני', 'group': m.get('chatId', ''),
                 'timestamp': m.get('timestamp', 0), 'is_outgoing': True
             })
@@ -171,6 +219,68 @@ def upload_to_yemot(text, sender, token, path):
         return r.json()
     except Exception as e:
         print(f'שגיאה בהעלאה לימות ({path}): {e}')
+        return {}
+
+def download_media_bytes(url):
+    """מוריד קובץ מדיה (שמע/וידאו) מוואטסאפ לפי כתובת ההורדה"""
+    try:
+        r = requests.get(url, timeout=60)
+        if r.status_code == 200 and r.content:
+            return r.content
+    except Exception as e:
+        print(f'שגיאה בהורדת מדיה: {e}')
+    return None
+
+def convert_to_wav(raw_bytes, src_suffix):
+    """ממיר קובץ שמע/וידאו לפורמט WAV טלפוני (8kHz מונו) בעזרת ffmpeg. מחזיר bytes או None"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=src_suffix, delete=False) as src_f:
+            src_f.write(raw_bytes)
+            src_path = src_f.name
+        dst_path = src_path + '.wav'
+        result = subprocess.run(
+            ['ffmpeg', '-y', '-i', src_path, '-vn', '-ar', '8000', '-ac', '1', dst_path],
+            capture_output=True, timeout=120
+        )
+        wav_bytes = None
+        if result.returncode == 0 and os.path.exists(dst_path):
+            with open(dst_path, 'rb') as out_f:
+                wav_bytes = out_f.read()
+        else:
+            print(f'שגיאת ffmpeg בהמרה: {result.stderr.decode(errors="ignore")[:300]}')
+        try:
+            os.remove(src_path)
+        except Exception:
+            pass
+        try:
+            os.remove(dst_path)
+        except Exception:
+            pass
+        return wav_bytes
+    except Exception as e:
+        print(f'שגיאה בהמרת מדיה ל-WAV: {e}')
+        return None
+
+def upload_media_to_yemot(wav_bytes, sender, media_kind, chat_name, token, path):
+    """מעלה קובץ מדיה בפועל (הקלטה קולית/סרטון) + תווית TTS שמכריזה מי שלח - התווית מועלית שנייה כדי שתישמע ראשונה (start=max)"""
+    try:
+        r_audio = requests.post(
+            'https://www.call2all.co.il/ym/api/UploadFile',
+            params={'token': token, 'path': path, 'autoNumbering': '1'},
+            files={'file': ('media.wav', wav_bytes, 'audio/wav')},
+            timeout=60
+        )
+        audio_result = r_audio.json()
+        if not audio_result.get('path'):
+            print(f'שגיאה בהעלאת קובץ מדיה: {audio_result}')
+            return {}
+
+        kind_label = 'הודעה קולית' if media_kind == 'audio' else 'סרטון'
+        label_text = f'{sender} שלח {kind_label}' + (f' בקבוצה {chat_name}' if chat_name.endswith('@g.us') else '')
+        label_result = upload_to_yemot(label_text, '', token, path)
+        return audio_result if label_result.get('path') else audio_result
+    except Exception as e:
+        print(f'שגיאה בהעלאת מדיה לימות ({path}): {e}')
         return {}
 
 def clear_new_folder(token):
@@ -237,8 +347,28 @@ def trigger_tzintuk(token, list_name):
     except Exception as e:
         print(f'שגיאה בשליחת צינתוק: {e}')
 
+def transcribe_hebrew(wav_bytes):
+    """מתמלל הקלטה לעברית באמצעות מודל Whisper חינמי (רץ מקומית, ללא API בתשלום)"""
+    try:
+        from faster_whisper import WhisperModel
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+            f.write(wav_bytes)
+            path = f.name
+        model = WhisperModel('small', device='cpu', compute_type='int8')
+        segments, _ = model.transcribe(path, language='he')
+        text = ' '.join(seg.text.strip() for seg in segments).strip()
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        return text
+    except Exception as e:
+        print(f'שגיאה בתמלול: {e}')
+        return ''
+
 def check_and_send_recordings(token, sent_recordings):
-    """בודק אם יש הקלטות חדשות בשלוחת ההקלטה, ושולח אותן לוואטסאפ לפי המספר שהוקלד כשם הקובץ"""
+    """בודק אם יש הקלטות חדשות בשלוחת ההקלטה, ושולח אותן לוואטסאפ (קול או טקסט מתומלל) לפי הספרות שהוקלדו כשם הקובץ.
+    פורמט השם: ספרה ראשונה = מצב (1=קול, 2=טקסט מתומלל), שאר הספרות = מספר הטלפון של הנמען"""
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
                           params={'token': token, 'path': YEMOT_EXTENSION_RECORD}, timeout=30)
@@ -254,11 +384,19 @@ def check_and_send_recordings(token, sent_recordings):
         if not uid or uid in sent_recordings:
             continue
 
-        phone_raw = name.split('.')[0]
-        if not phone_raw.isdigit() or len(phone_raw) < 8:
+        raw = name.split('.')[0]
+        if not raw.isdigit() or len(raw) < 8:
             print(f'שם קובץ לא נראה כמו מספר טלפון, מדלג: {name}')
             sent_recordings.add(uid)
             continue
+
+        # ספרה ראשונה 1/2 = מצב שליחה, אחרת - תאימות לאחור (שולחים כקול)
+        if raw[0] in ('1', '2') and len(raw) - 1 >= 8:
+            mode = raw[0]
+            phone_raw = raw[1:]
+        else:
+            mode = '1'
+            phone_raw = raw
 
         chat_id = normalize_phone(phone_raw) + '@c.us'
         file_path = f'{YEMOT_EXTENSION_RECORD}/{name}'
@@ -270,20 +408,39 @@ def check_and_send_recordings(token, sent_recordings):
                 print(f'שגיאה בהורדת הקלטה {name}')
                 continue
 
-            files_payload = {'file': (name, dl.content, 'audio/wav')}
-            data_payload = {'chatId': chat_id, 'caption': 'הודעה קולית חדשה מהקו'}
-            sr = requests.post(
-                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
-                data=data_payload, files=files_payload, timeout=30
-            )
-            if sr.status_code == 200 and sr.json().get('idMessage'):
-                print(f'הקלטה נשלחה בהצלחה ל-{chat_id}: {name}')
+            sent_ok = False
+            if mode == '2':
+                # מצב טקסט: מתמללים ושולחים כהודעת טקסט רגילה
+                text = transcribe_hebrew(dl.content)
+                if text:
+                    sr = requests.post(
+                        f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                        json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{text}'}, timeout=30
+                    )
+                    sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                    if not sent_ok:
+                        print(f'שגיאה בשליחת טקסט מתומלל ל-{chat_id}: {sr.text[:200]}')
+                else:
+                    print(f'לא הצלחתי לתמלל את ההקלטה {name}, שולח כקול במקום')
+                    mode = '1'  # נופלים חזרה לשליחה כקול
+
+            if mode == '1':
+                files_payload = {'file': (name, dl.content, 'audio/wav')}
+                data_payload = {'chatId': chat_id, 'caption': 'הודעה קולית חדשה מהקו'}
+                sr = requests.post(
+                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
+                    data=data_payload, files=files_payload, timeout=30
+                )
+                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                if not sent_ok:
+                    print(f'שגיאה בשליחת הקלטה ל-{chat_id}: {sr.text[:200]}')
+
+            if sent_ok:
+                print(f'הקלטה נשלחה בהצלחה ל-{chat_id} (מצב {mode}): {name}')
                 sent_recordings.add(uid)
                 # מוחקים את הקובץ מהשלוחה כדי לפנות את השם למקרה הבא ולמנוע שליחה כפולה
                 requests.get('https://www.call2all.co.il/ym/api/FileAction',
                              params={'token': token, 'path': file_path, 'action': 'delete'}, timeout=30)
-            else:
-                print(f'שגיאה בשליחת הקלטה ל-{chat_id}: {sr.text[:200]}')
         except Exception as e:
             print(f'שגיאה בטיפול בהקלטה {name}: {e}')
 
@@ -323,7 +480,7 @@ def main():
     reset_requested = False
     content_messages = []
     for m in new_messages:
-        if m.get('is_outgoing') and m['text'].strip() == RESET_KEYWORD:
+        if m.get('type', 'text') == 'text' and m.get('is_outgoing') and m['text'].strip() == RESET_KEYWORD:
             reset_requested = True
             uploaded_ids.add(m['id'])
             continue
@@ -356,18 +513,41 @@ def main():
         newly_uploaded = []
         for msg in content_messages:
             try:
-                result = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION)
-                path = result.get('path', '')
-                if path:
-                    print(f'הועלה [הכל]: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
-                    newly_uploaded.append(msg['id'])
-                else:
-                    print(f'שגיאה בהעלאה לתיקיית הכל: {msg["text"][:40]}')
-                    continue
+                if msg.get('type') == 'media':
+                    raw_bytes = download_media_bytes(msg['download_url'])
+                    if not raw_bytes:
+                        print(f'דילוג - נכשלה הורדת מדיה [{msg["media_kind"]}] מ-{msg["sender"]}')
+                        continue
+                    suffix = '.ogg' if msg['media_kind'] == 'audio' else '.mp4'
+                    wav_bytes = convert_to_wav(raw_bytes, suffix)
+                    if not wav_bytes:
+                        print(f'דילוג - נכשלה המרת מדיה [{msg["media_kind"]}] מ-{msg["sender"]}')
+                        continue
 
-                result2 = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION_NEW)
-                if result2.get('path'):
-                    unheard_ids.add(msg['id'])
+                    result = upload_media_to_yemot(wav_bytes, msg['sender'], msg['media_kind'], msg['group'], token, YEMOT_EXTENSION)
+                    if result.get('path'):
+                        print(f'הועלה מדיה [הכל]: [{msg["group"]}] {msg["sender"]} ({msg["media_kind"]}) → {result["path"]}')
+                        newly_uploaded.append(msg['id'])
+                    else:
+                        print(f'שגיאה בהעלאת מדיה לתיקיית הכל מ-{msg["sender"]}')
+                        continue
+
+                    result2 = upload_media_to_yemot(wav_bytes, msg['sender'], msg['media_kind'], msg['group'], token, YEMOT_EXTENSION_NEW)
+                    if result2.get('path'):
+                        unheard_ids.add(msg['id'])
+                else:
+                    result = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION)
+                    path = result.get('path', '')
+                    if path:
+                        print(f'הועלה [הכל]: [{msg["group"]}] {msg["sender"]}: {msg["text"][:40]} → {path}')
+                        newly_uploaded.append(msg['id'])
+                    else:
+                        print(f'שגיאה בהעלאה לתיקיית הכל: {msg["text"][:40]}')
+                        continue
+
+                    result2 = upload_to_yemot(msg['text'], msg['sender'], token, YEMOT_EXTENSION_NEW)
+                    if result2.get('path'):
+                        unheard_ids.add(msg['id'])
             except Exception as e:
                 print(f'שגיאה בהעלאת הודעה: {e}')
             time.sleep(0.1)
