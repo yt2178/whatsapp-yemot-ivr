@@ -10,10 +10,11 @@ GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
 GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
-YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:1')          # כל ההודעות
-YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:2')  # רק חדשות שלא נשמעו
-YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:3')  # הקלטות לשליחה לוואטסאפ
-YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות
+YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:4')          # כל ההודעות (מקש 4)
+YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:1')  # רק חדשות שלא נשמעו (מקש 1)
+YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:2')  # הקלטות לשליחה לוואטסאפ (מקש 2)
+YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות (מקש 5)
+CONTACTS_FILE = 'contacts.json'  # קיצורי אנשי קשר (קוד קצר -> שם ומספר)
 RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
 TZINTUK_LIST = os.environ.get('TZINTUK_LIST', 'yt2178whatsapp')  # שם רשימת הצינתוקים החינמית (ivr2:6 = שלוחת הרשמה)
 OWN_CHAT_ID = os.environ.get('OWN_CHAT_ID', '972526751178@c.us')  # הצ'אט עם עצמי (הודעות עצמיות) - תמיד נכלל במלואו
@@ -23,6 +24,32 @@ STATE_FILE = 'state.json'
 HISTORY_MINUTES = int(os.environ.get('HISTORY_MINUTES', '10080'))  # 7 days back-fill
 TEXT_TYPES = ('textMessage', 'extendedTextMessage')
 MEDIA_TYPES = ('audioMessage', 'videoMessage')  # הודעות קוליות וסרטונים
+
+def format_phone_label(raw):
+    """הופך מזהה גולמי (למשל 972501234567@c.us) למספר קריא, לשימוש כשאין שם שמור לשולח"""
+    if not raw:
+        return 'מספר לא ידוע'
+    digits = ''.join(c for c in raw if c.isdigit())
+    if not digits:
+        return 'מספר לא ידוע'
+    if digits.startswith('972'):
+        digits = '0' + digits[3:]
+    return digits
+
+def load_contacts():
+    """טוען את רשימת קיצורי אנשי הקשר (קוד קצר -> מספר) מתוך הריפו, לשימוש בשלוחת ההקלטה"""
+    try:
+        r = requests.get(
+            f'https://api.github.com/repos/{GITHUB_REPO}/contents/{CONTACTS_FILE}',
+            headers={'Authorization': f'Bearer {GITHUB_TOKEN}'}, timeout=15
+        )
+        if r.status_code == 200:
+            data = r.json()
+            content = b64decode(data['content']).decode('utf-8')
+            return json.loads(content)
+    except Exception as e:
+        print(f'שגיאה בטעינת אנשי קשר: {e}')
+    return {}
 
 def load_state():
     try:
@@ -105,7 +132,8 @@ def fetch_queue_messages():
         chat_id = sender_data.get('chatId', '')
         chat_name = sender_data.get('chatName', '') or chat_id
         is_outgoing = webhook_type == 'outgoingMessageReceived'
-        sender_name = 'אני' if is_outgoing else sender_data.get('senderName', '')
+        sender_phone_raw = sender_data.get('sender', '') or chat_id
+        sender_name = 'אני' if is_outgoing else (sender_data.get('senderName', '') or format_phone_label(sender_phone_raw))
         msg_id = body.get('idMessage', '') or str(rid)
         timestamp = body.get('timestamp', 0)
 
@@ -157,8 +185,9 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
                 if not download_url:
                     continue
                 media_kind = 'audio' if type_msg == 'audioMessage' else 'video'
+                sender_disp = m.get('senderName', '') or format_phone_label(m.get('sender', '') or m.get('chatId', ''))
                 messages.append(_media_entry(
-                    m.get('idMessage', ''), media_kind, m.get('senderName', ''), m.get('chatId', ''),
+                    m.get('idMessage', ''), media_kind, sender_disp, m.get('chatId', ''),
                     m.get('timestamp', 0), False, download_url, m.get('mimeType', ''), m.get('caption', '')
                 ))
                 continue
@@ -167,9 +196,10 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             text = m.get('textMessage') or (m.get('extendedTextMessageData') or {}).get('text', '')
             if not text.strip():
                 continue
+            sender_disp = m.get('senderName', '') or format_phone_label(m.get('sender', '') or m.get('chatId', ''))
             messages.append({
                 'id': m.get('idMessage', ''), 'type': 'text', 'text': text,
-                'sender': m.get('senderName', ''), 'group': m.get('chatId', ''),
+                'sender': sender_disp, 'group': m.get('chatId', ''),
                 'timestamp': m.get('timestamp', 0), 'is_outgoing': False
             })
     except Exception as e:
@@ -391,14 +421,26 @@ def check_and_send_recordings(token, sent_recordings):
             continue
 
         # ספרה ראשונה 1/2 = מצב שליחה, אחרת - תאימות לאחור (שולחים כקול)
-        if raw[0] in ('1', '2') and len(raw) - 1 >= 8:
+        if raw[0] in ('1', '2') and len(raw) >= 2:
             mode = raw[0]
-            phone_raw = raw[1:]
+            recipient_raw = raw[1:]
         else:
             mode = '1'
-            phone_raw = raw
+            recipient_raw = raw
 
-        chat_id = normalize_phone(phone_raw) + '@c.us'
+        # אם מה שהוקלד קצר (1-3 ספרות) - זה קוד קיצור לאיש קשר שמור, לא מספר טלפון מלא
+        if len(recipient_raw) <= 3:
+            contacts = load_contacts()
+            contact = contacts.get(recipient_raw)
+            if not contact:
+                print(f'קוד קיצור לא מוכר: {recipient_raw}, מדלג על הקלטה {name}')
+                sent_recordings.add(uid)
+                continue
+            chat_id = normalize_phone(contact['phone']) + '@c.us'
+            recipient_label = contact.get('name', recipient_raw)
+        else:
+            chat_id = normalize_phone(recipient_raw) + '@c.us'
+            recipient_label = recipient_raw
         file_path = f'{YEMOT_EXTENSION_RECORD}/{name}'
 
         try:
