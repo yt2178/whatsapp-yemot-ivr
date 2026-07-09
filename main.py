@@ -10,8 +10,8 @@ GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
 GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
-YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:4')          # כל ההודעות (מקש 4)
-YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:1')  # רק חדשות שלא נשמעו (מקש 1)
+YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:4')          # כל ההיסטוריה (מקש 4)
+YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:1')  # הודעות חדשות שלא נשמעו (מקש 1)
 YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:2')  # הקלטות לשליחה לוואטסאפ (מקש 2)
 YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות (מקש 5)
 CONTACTS_FILE = 'contacts.json'  # קיצורי אנשי קשר (קוד קצר -> שם ומספר)
@@ -35,6 +35,30 @@ def format_phone_label(raw):
     if digits.startswith('972'):
         digits = '0' + digits[3:]
     return digits
+
+def get_contact_name(phone_raw, fallback_name=''):
+    """מחזיר את השם הכי טוב: אם fallback_name נראה כשם אמיתי (לא מספר) - משתמשים בו.
+    אחרת מנסים להביא שם מ-Green API, נכשל → מספר פורמטי"""
+    if fallback_name:
+        stripped = fallback_name.strip()
+        # אם זה לא מספר (לא מתחיל ב-0 ולא ב-972) — כנראה שם אמיתי
+        if stripped and not stripped.lstrip('+').isdigit():
+            return stripped
+    # מנסים Green API
+    try:
+        p = phone_raw.split('@')[0]
+        chat_id = phone_raw if '@' in phone_raw else p + '@c.us'
+        url = f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/getContactInfo/{GREEN_API_TOKEN}'
+        r = requests.post(url, json={'chatId': chat_id}, timeout=8)
+        if r.status_code == 200:
+            d = r.json()
+            name = d.get('name', '') or d.get('contactName', '') or ''
+            if name and not name.lstrip('+').isdigit() and name != p:
+                return name
+    except Exception:
+        pass
+    # fallback → מספר קריא
+    return fallback_name or format_phone_label(phone_raw)
 
 def load_contacts():
     """טוען את רשימת קיצורי אנשי הקשר (קוד קצר -> מספר) מתוך הריפו, לשימוש בשלוחת ההקלטה"""
@@ -133,7 +157,7 @@ def fetch_queue_messages():
         chat_name = sender_data.get('chatName', '') or chat_id
         is_outgoing = webhook_type == 'outgoingMessageReceived'
         sender_phone_raw = sender_data.get('sender', '') or chat_id
-        sender_name = 'אני' if is_outgoing else (sender_data.get('senderName', '') or format_phone_label(sender_phone_raw))
+        sender_name = 'אני' if is_outgoing else get_contact_name(sender_phone_raw, sender_data.get('senderName', ''))
         msg_id = body.get('idMessage', '') or str(rid)
         timestamp = body.get('timestamp', 0)
 
@@ -185,7 +209,7 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
                 if not download_url:
                     continue
                 media_kind = 'audio' if type_msg == 'audioMessage' else 'video'
-                sender_disp = m.get('senderName', '') or format_phone_label(m.get('sender', '') or m.get('chatId', ''))
+                sender_disp = get_contact_name(m.get('sender', '') or m.get('chatId', ''), m.get('senderName', ''))
                 messages.append(_media_entry(
                     m.get('idMessage', ''), media_kind, sender_disp, m.get('chatId', ''),
                     m.get('timestamp', 0), False, download_url, m.get('mimeType', ''), m.get('caption', '')
@@ -196,7 +220,7 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
             text = m.get('textMessage') or (m.get('extendedTextMessageData') or {}).get('text', '')
             if not text.strip():
                 continue
-            sender_disp = m.get('senderName', '') or format_phone_label(m.get('sender', '') or m.get('chatId', ''))
+            sender_disp = get_contact_name(m.get('sender', '') or m.get('chatId', ''), m.get('senderName', ''))
             messages.append({
                 'id': m.get('idMessage', ''), 'type': 'text', 'text': text,
                 'sender': sender_disp, 'group': m.get('chatId', ''),
@@ -330,7 +354,11 @@ def clear_new_folder(token):
         print(f'שגיאה באיפוס תיקיית חדשות: {e}')
 
 def check_phone_reset(token):
-    """בודק אם מישהו חייג לשלוחת האיפוס הטלפונית (ivr2:5) - אם כן, מאפס את תיקיית החדשות ומנקה את שלוחת האיפוס"""
+    """בודק אם מישהו חייג לשלוחת האיפוס (ivr2:5) - אם כן:
+    1. מאפס את תיקיית החדשות (ivr2:1)
+    2. בודק שהתיקייה אכן ריקה
+    3. מעלה TTS לשלוחה 5 שישמע 'ההודעות החדשות אופסו' (ייכנס לתור הניגון)
+    4. מנקה את שלוחת האיפוס ומשחזר הגדרותיה"""
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
                           params={'token': token, 'path': YEMOT_EXTENSION_RESET}, timeout=30)
@@ -343,17 +371,44 @@ def check_phone_reset(token):
         return False
 
     print(f'זוהה איפוס דרך הקו ({len(files)} קבצי טריגר) - מנקה תיקיית חדשות')
+
+    # שלב 1: מחיקה + בדיקה
     clear_new_folder(token)
+    time.sleep(1)
+
+    # שלב 2: בדיקה שאכן ריקה
+    try:
+        rcheck = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                              params={'token': token, 'path': YEMOT_EXTENSION_NEW}, timeout=30)
+        remaining = len(rcheck.json().get('files', []))
+        success = (remaining == 0)
+        print(f'קבצים שנשארו לאחר איפוס: {remaining}')
+    except Exception:
+        success = True  # אם לא ניתן לבדוק, מניחים שהצליח
+
+    # שלב 3: ניקוי שלוחת ה-record (5) + שחזור הגדרות + הכנסת TTS אישור
     try:
         requests.get('https://www.call2all.co.il/ym/api/FileAction',
                      params={'token': token, 'path': YEMOT_EXTENSION_RESET, 'action': 'delete'}, timeout=30)
-        # משחזרים את הגדרות השלוחה כי מחיקת התיקייה מוחקת גם את ה-ext.ini שלה
+        time.sleep(0.5)
+        # שחזור הגדרות השלוחה (נמחקו יחד עם ext.ini)
         requests.get('https://www.call2all.co.il/ym/api/UpdateExtension', params={
             'token': token, 'path': YEMOT_EXTENSION_RESET, 'type': 'record', 'title': 'איפוס הודעות חדשות',
             'record_ok': '#', 'say_record_number': 'no', 'option_record': '-1-',
         }, timeout=30)
+        # העלאת M2991.tts לשלוחה 5 (prompt שישמע בפעם הבאה)
+        prompt5 = 'לאיפוס הודעות חדשות לחצו כוכבית'
+        requests.post('https://www.call2all.co.il/ym/api/UploadFile',
+                      params={'token': token, 'path': YEMOT_EXTENSION_RESET, 'tts': '1'},
+                      files={'file': ('M2991.tts', prompt5.encode('utf-8'), 'text/plain')},
+                      timeout=30)
     except Exception as e:
         print(f'שגיאה בניקוי שלוחת איפוס טלפוני: {e}')
+
+    if success:
+        print('✅ איפוס הסתיים בהצלחה')
+    else:
+        print('⚠️ האיפוס בוצע אך נשארו קצת קבצים')
     return True
 
 def normalize_phone(raw_digits):
