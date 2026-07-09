@@ -266,7 +266,7 @@ def upload_media_to_yemot(wav_bytes, sender, media_kind, chat_name, token, path)
     try:
         r_audio = requests.post(
             'https://www.call2all.co.il/ym/api/UploadFile',
-            params={'token': token, 'path': path, 'autoNumbering': '1'},
+            params={'token': token, 'path': path, 'autoNumbering': '1', 'convertAudio': '1'},
             files={'file': ('media.wav', wav_bytes, 'audio/wav')},
             timeout=60
         )
