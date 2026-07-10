@@ -24,6 +24,7 @@ STATE_FILE = 'state.json'
 HISTORY_MINUTES = int(os.environ.get('HISTORY_MINUTES', '10080'))  # 7 days back-fill
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')  # חינמי: console.groq.com
 TEXT_TYPES = ('textMessage', 'extendedTextMessage')
+EDITED_TYPES = ('editedMessage',)  # הודעה נערכה = נחשבת חדשה
 MEDIA_TYPES = ('audioMessage', 'videoMessage')  # הודעות קוליות וסרטונים
 
 def format_phone_label(raw):
@@ -1123,7 +1124,7 @@ def main():
     # שמור 50 הודעות אחרונות לשימוש AI
     if 'last_messages' not in state:
         state['last_messages'] = []
-    state['last_messages'] = (state['last_messages'] + all_messages)[-50:]
+    state['last_messages'] = (state['last_messages'] + new_messages)[-50:]
     state['sent_recordings'] = list(sent_recordings)[-500:]
     save_state(state)
 
