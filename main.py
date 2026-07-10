@@ -538,78 +538,206 @@ def check_and_send_recordings(token, sent_recordings):
     נתיב A (ivr2:2:2) — הקשת מספר/קיצור (ספרות), כרגיל.
     נתיב B (ivr2:2:1) — תמלול שם קולי: קובץ name.wav ← תמלול ← חיפוש בcontacts ← הקלטת ההודעה ב-ivr2:2:1:record.
     """
-    # ===== נתיב A: שלוחה 2:2 — הקלטת מספר בקול + אישור + הקלטת הודעה =====
-    # 2:2       = הקלטת המספר (קול) → # → 2:2:confirm
-    # 2:2:record = הקלטת ההודעה לאחר אישור
-    # הלוגיקה: לכל קובץ ב-2:2 מחפשים קובץ מקביל ב-2:2:record לפי סדר זמן
+    # ===== נתיב A: שלוחה 2:2 — הקלטת מספר + mode + קול/טקסט עם אישור =====
+    #
+    # 2:2           = הקלטת מספר טלפון קולית   → files here
+    # 2:2:confirm   = routing אישור (main.py לא צריך לגעת בו)
+    # 2:2:mode      = routing בחירת מצב (לא צריך לגעת)
+    # 2:2:voice     = הקלטת הודעה קולית         → files here → שולח ישיר
+    # 2:2:text      = הקלטת הודעה לתמלול        → files here → Whisper → TTS אישור → 2:2:text:ok
+    # 2:2:text:ok   = routing אישור תמלול        → 1=שלח / 2=חזור
+    # 2:2:text:send = transfer (main.py שולח כשרואה אישור)
+    #
+    # מיפוי: כל קובץ ב-2:2 (מספר) מותאם ל-2:2:voice או 2:2:text לפי סדר זמן
+    
     try:
         r_phone = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
                                params={'token': token, 'path': 'ivr2:2:2'}, timeout=30)
-        phone_files = [f for f in r_phone.json().get('files', [])
-                       if f.get('name','').endswith(('.wav','.opus'))]
-        r_msg = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
-                             params={'token': token, 'path': 'ivr2:2:2:record'}, timeout=30)
-        msg_files = [f for f in r_msg.json().get('files', [])
-                     if f.get('name','').endswith(('.wav','.opus'))]
+        phone_files = sorted(
+            [f for f in r_phone.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+            key=lambda x: x.get('date','')
+        )
+        r_voice = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                               params={'token': token, 'path': 'ivr2:2:2:voice'}, timeout=30)
+        voice_files = sorted(
+            [f for f in r_voice.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+            key=lambda x: x.get('date','')
+        )
+        r_text = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                              params={'token': token, 'path': 'ivr2:2:2:text'}, timeout=30)
+        text_files = sorted(
+            [f for f in r_text.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+            key=lambda x: x.get('date','')
+        )
+        r_textok = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                                params={'token': token, 'path': 'ivr2:2:2:text:ok'}, timeout=30)
+        textok_ini = r_textok.json().get('extIni', {})
+        # בדיקה אם כבר יש TTS אישור (תמלול) שממתין לאישור משתמש
+        r_textok_files = [f for f in r_textok.json().get('files', []) if f.get('name','').endswith('.tts')]
+        r_textsend = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                                  params={'token': token, 'path': 'ivr2:2:2:text:send'}, timeout=30)
+        textsend_files = sorted(
+            [f for f in r_textsend.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+            key=lambda x: x.get('date','')
+        )
     except Exception as e:
-        print(f'שגיאה בבדיקת נתיב A: {e}')
-        phone_files, msg_files = [], []
+        print(f'שגיאה בטעינת נתיב A: {e}')
+        phone_files = voice_files = text_files = textsend_files = []
+        textok_ini = {}
+        r_textok_files = []
 
-    phone_files.sort(key=lambda x: x.get('date',''))
-    msg_files.sort(key=lambda x: x.get('date',''))
-
-    for i, pf in enumerate(phone_files):
-        uid = pf.get('uniqueId','')
+    # --- שלב 1: הודעות קוליות מוכנות (2:2:voice) ---
+    for i, vf in enumerate(voice_files):
+        uid = vf.get('uniqueId','')
         if not uid or uid in sent_recordings:
             continue
-        if i >= len(msg_files):
-            print(f'ממתין להקלטת הודעה מקבילה לקובץ מספר {pf["name"]}')
+        # מחפש קובץ מספר מקביל
+        if i >= len(phone_files):
+            print(f'אין קובץ מספר מקביל ל-voice {vf["name"]}')
             break
+        pf = phone_files[i]
+        phone_uid = pf.get('uniqueId','')
 
-        mf = msg_files[i]
-        msg_uid = mf.get('uniqueId','')
-        if msg_uid in sent_recordings:
-            sent_recordings.add(uid)
-            continue
-
-        # תמלול הקלטת המספר
-        print(f'נתיב A: מתמלל מספר מ-{pf["name"]}...')
+        # תמלול המספר
+        print(f'[נתיב A קול] מתמלל מספר מ-{pf["name"]}...')
         try:
-            dl_phone = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
-                                    params={'token': token, 'path': f'ivr2:2:2/{pf["name"]}'}, timeout=30)
-            phone_text = transcribe_hebrew(dl_phone.content if dl_phone.status_code == 200 else b'').strip()
+            dl_p = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                params={'token': token, 'path': f'ivr2:2:2/{pf["name"]}'}, timeout=30)
+            phone_text = transcribe_hebrew(dl_p.content if dl_p.status_code == 200 else b'').strip()
         except Exception as e:
             print(f'שגיאה בתמלול מספר: {e}')
             phone_text = ''
 
-        print(f'תמלול מספר: "{phone_text}"')
         digits_only = ''.join(c for c in phone_text if c.isdigit())
+        print(f'מספר שזוהה: "{digits_only}"')
 
         if len(digits_only) < 7:
-            print(f'מספר לא זוהה מהתמלול "{phone_text}", מדלג')
-            sent_recordings.add(uid)
-            sent_recordings.add(msg_uid)
-            for path in [f'ivr2:2:2/{pf["name"]}', f'ivr2:2:2:record/{mf["name"]}']:
-                try:
-                    requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                                 params={'token': token, 'path': path, 'action': 'delete'}, timeout=30)
-                except Exception:
-                    pass
+            print(f'מספר לא תקין, מדלג')
+            for uid_skip, path_skip in [(uid, f'ivr2:2:2:voice/{vf["name"]}'), (phone_uid, f'ivr2:2:2/{pf["name"]}')]:
+                sent_recordings.add(uid_skip)
+                try: requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                                  params={'token': token, 'path': path_skip, 'action': 'delete'}, timeout=30)
+                except: pass
             continue
 
         chat_id = normalize_phone(digits_only) + '@c.us'
-        recipient_label = digits_only
-
-        # שליחת ההודעה
         sent_recordings = send_recording_to_whatsapp(
-            token, f'ivr2:2:2:record/{mf["name"]}', chat_id, recipient_label, '1', sent_recordings, msg_uid)
-        sent_recordings.add(uid)
-        # מחיקת הקלטת המספר
+            token, f'ivr2:2:2:voice/{vf["name"]}', chat_id, digits_only, '1', sent_recordings, uid)
+        sent_recordings.add(phone_uid)
+        try: requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                          params={'token': token, 'path': f'ivr2:2:2/{pf["name"]}', 'action': 'delete'}, timeout=30)
+        except: pass
+
+    # --- שלב 2: הודעות טקסט — תמלול + TTS אישור → העלאה ל-2:2:text:ok ---
+    # קובץ ב-2:2:text שעדיין אין לו TTS אישור ב-2:2:text:ok → מתמלל ומעלה TTS
+    # (אחד בכל פעם — מחכים לאישור המשתמש בריצה הבאה)
+    if text_files and not r_textok_files:
+        tf = text_files[0]
+        uid = tf.get('uniqueId','')
+        if uid and uid not in sent_recordings:
+            # מחפש מספר מקביל (לפי index בין phone_files ל-text)
+            # phone_files שלא שויכו לvoice הם השלוחות שהיו text
+            used_phone_count = len([vf for vf in voice_files if vf.get('uniqueId','') not in sent_recordings or True])
+            # פשוט: phone_files[len(voice_files)] = המספר המקביל לtext[0]
+            phone_idx = len(voice_files)
+            pf = phone_files[phone_idx] if phone_idx < len(phone_files) else None
+
+            print(f'[נתיב A טקסט] מתמלל הקלטת הודעה מ-{tf["name"]}...')
+            try:
+                dl_t = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                    params={'token': token, 'path': f'ivr2:2:2:text/{tf["name"]}'}, timeout=30)
+                transcribed = transcribe_hebrew(dl_t.content if dl_t.status_code == 200 else b'').strip()
+            except Exception as e:
+                print(f'שגיאה בתמלול הודעה: {e}')
+                transcribed = ''
+
+            if transcribed:
+                print(f'תמלול: "{transcribed}"')
+                # מעלה TTS לשלוחת האישור (2:2:text:ok)
+                tts_confirm = f'ההודעה המתומללת היא: {transcribed}. לאישור ושליחה לחץ 1. להקלטה מחדש לחץ 2.'
+                try:
+                    requests.post('https://www.call2all.co.il/ym/api/UploadFile',
+                        params={'token': token, 'path': 'ivr2:2:2:text:ok', 'tts': '1'},
+                        files={'file': ('M2991.tts', tts_confirm.encode('utf-8'), 'text/plain')}, timeout=30)
+                    print(f'TTS אישור הועלה ל-2:2:text:ok')
+                except Exception as e:
+                    print(f'שגיאה בהעלאת TTS אישור: {e}')
+            else:
+                print('לא הצלחתי לתמלל, מדלג')
+                sent_recordings.add(uid)
+                try: requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                                  params={'token': token, 'path': f'ivr2:2:2:text/{tf["name"]}', 'action': 'delete'}, timeout=30)
+                except: pass
+
+    # --- שלב 3: אם יש קובץ ב-2:2:text:send — המשתמש אישר → שולח טקסט ---
+    for sf in textsend_files:
+        uid = sf.get('uniqueId','')
+        if not uid or uid in sent_recordings:
+            continue
+        # מצא text file + phone file מקביל
+        phone_idx = len(voice_files)
+        pf = phone_files[phone_idx] if phone_idx < len(phone_files) else None
+        tf = text_files[0] if text_files else None
+
+        # שחזר את הטקסט מתוך TTS האישור ב-2:2:text:ok (שמשמש כcache)
+        transcribed = ''
         try:
-            requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                         params={'token': token, 'path': f'ivr2:2:2/{pf["name"]}', 'action': 'delete'}, timeout=30)
-        except Exception:
-            pass
+            r_tts = requests.get('https://www.call2all.co.il/ym/api/GetTextFile',
+                                 params={'token': token, 'path': 'ivr2:2:2:text:ok/M2991.tts'}, timeout=30)
+            tts_content = r_tts.json().get('contents','')
+            # חלץ את הטקסט מתוך ה-TTS (פורמט: "ההודעה המתומללת היא: TEXT. לאישור...")
+            if 'ההודעה המתומללת היא:' in tts_content:
+                transcribed = tts_content.split('ההודעה המתומללת היא:')[1].split('. לאישור')[0].strip()
+        except Exception as e:
+            print(f'שגיאה בשחזור טקסט: {e}')
+
+        if not transcribed and tf:
+            # תמלל מחדש אם צריך
+            try:
+                dl_t = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                    params={'token': token, 'path': f'ivr2:2:2:text/{tf["name"]}'}, timeout=30)
+                transcribed = transcribe_hebrew(dl_t.content if dl_t.status_code == 200 else b'').strip()
+            except Exception:
+                pass
+
+        # מספר הנמען
+        digits_only = ''
+        if pf:
+            try:
+                dl_p = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                    params={'token': token, 'path': f'ivr2:2:2/{pf["name"]}'}, timeout=30)
+                phone_text = transcribe_hebrew(dl_p.content if dl_p.status_code == 200 else b'').strip()
+                digits_only = ''.join(c for c in phone_text if c.isdigit())
+            except Exception:
+                pass
+
+        if transcribed and len(digits_only) >= 7:
+            chat_id = normalize_phone(digits_only) + '@c.us'
+            print(f'[נתיב A טקסט] שולח טקסט ל-{chat_id}: "{transcribed}"')
+            try:
+                sr = requests.post(
+                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                    json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{transcribed}'}, timeout=30)
+                if sr.status_code == 200 and sr.json().get('idMessage'):
+                    print(f'✅ נשלח!')
+                    sent_recordings.add(uid)
+                    # ניקוי: מחיקת text file, phone file, TTS אישור, send file
+                    for path_del in [
+                        f'ivr2:2:2:text:send/{sf["name"]}',
+                        f'ivr2:2:2/{pf["name"]}' if pf else None,
+                        f'ivr2:2:2:text/{tf["name"]}' if tf else None,
+                    ]:
+                        if path_del:
+                            try: requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                                              params={'token': token, 'path': path_del, 'action': 'delete'}, timeout=30)
+                            except: pass
+                    if pf: sent_recordings.add(pf.get('uniqueId',''))
+                    if tf: sent_recordings.add(tf.get('uniqueId',''))
+            except Exception as e:
+                print(f'שגיאה בשליחת טקסט: {e}')
+        else:
+            print(f'חסר טקסט או מספר, מדלג על שליחה')
+            sent_recordings.add(uid)
 
     # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
     # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
