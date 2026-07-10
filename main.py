@@ -558,13 +558,9 @@ def check_and_send_recordings(token, sent_recordings):
             sent_recordings.add(uid)
             continue
 
-        # ספרה ראשונה = מצב (1=קול, 2=טקסט)
-        if raw[0] in ('1', '2') and len(raw) >= 2:
-            mode = raw[0]
-            recipient_raw = raw[1:]
-        else:
-            mode = '1'
-            recipient_raw = raw
+        # נתיב A = תמיד שליחה כקול (mode=1)
+        # raw כולו = מספר טלפון (ללא prefix מצב)
+        recipient_raw = raw
 
         if len(recipient_raw) <= 3:
             contacts = load_contacts()
@@ -580,7 +576,7 @@ def check_and_send_recordings(token, sent_recordings):
             recipient_label = recipient_raw
 
         sent_recordings = send_recording_to_whatsapp(
-            token, f'ivr2:2:2/{name}', chat_id, recipient_label, mode, sent_recordings, uid)
+            token, f'ivr2:2:2/{name}', chat_id, recipient_label, '1', sent_recordings, uid)
 
     # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
     # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
