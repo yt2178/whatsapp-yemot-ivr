@@ -987,9 +987,47 @@ def check_and_send_recordings(token, sent_recordings, state=None):
 
     return sent_recordings
 
+def acquire_lock(state):
+    """בודק אם ריצה אחרת כבר פועלת. מחזיר True אם קיבלנו lock, False אם כבר תפוס."""
+    now = time.time()
+    running_since = state.get('running_since', 0)
+    if running_since and (now - running_since) < 180:  # 3 דקות timeout
+        print(f'⚠️  ריצה אחרת כבר פועלת (לפני {int(now - running_since)} שניות) — דולג')
+        return False
+    state['running_since'] = now
+    # שמור מיד כדי ל"הזמין" את ה-lock (שומר העתק, _sha נשמר בstate המקורי)
+    sha_backup = state.get('_sha')
+    save_state(dict(state))
+    state['_sha'] = sha_backup  # שחזר _sha כי save_state עושה pop
+    # טען מחדש ובדוק שה-lock שלנו נשמר (אין race עם תהליך אחר)
+    time.sleep(2)
+    fresh = load_state()
+    fresh_since = fresh.get('running_since', 0)
+    if abs(fresh_since - now) > 5:
+        print(f'⚠️  race condition זוהה — ריצה אחרת ניצחה את ה-lock')
+        return False
+    return True
+
+def release_lock(state):
+    """משחרר את ה-lock בסוף ריצה — טוען sha עדכני כדי שה-save_state הסופי יצליח."""
+    state.pop('running_since', None)
+    # עדכן _sha ל-sha האחרון שנשמר בגיט (כדי שהsave הסופי לא יכשל ב-409)
+    try:
+        r = requests.get(
+            f'https://api.github.com/repos/{GITHUB_REPO}/contents/{STATE_FILE}',
+            headers={'Authorization': f'Bearer {GITHUB_TOKEN}'}, timeout=15
+        )
+        if r.status_code == 200:
+            state['_sha'] = r.json()['sha']
+    except Exception:
+        pass
+
 def main():
     print('טוען מצב קודם...')
     state = load_state()
+    # בדיקת lock — אם ריצה אחרת פועלת, יוצאים
+    if not acquire_lock(state):
+        return
     uploaded_ids = set(state.get('uploaded_ids', []))
     unheard_ids = set(state.get('unheard_ids', []))
     sent_recordings = set(state.get('sent_recordings', []))
@@ -1126,6 +1164,7 @@ def main():
         state['last_messages'] = []
     state['last_messages'] = (state['last_messages'] + new_messages)[-50:]
     state['sent_recordings'] = list(sent_recordings)[-500:]
+    release_lock(state)
     save_state(state)
 
     try:
