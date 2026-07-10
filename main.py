@@ -22,6 +22,7 @@ GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '')
 GITHUB_REPO = 'yt2178/whatsapp-yemot-ivr'
 STATE_FILE = 'state.json'
 HISTORY_MINUTES = int(os.environ.get('HISTORY_MINUTES', '10080'))  # 7 days back-fill
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')  # חינמי: console.groq.com
 TEXT_TYPES = ('textMessage', 'extendedTextMessage')
 MEDIA_TYPES = ('audioMessage', 'videoMessage')  # הודעות קוליות וסרטונים
 
@@ -90,7 +91,7 @@ def load_state():
             return state
     except Exception as e:
         print(f'שגיאה בטעינת state: {e}')
-    return {'uploaded_ids': [], 'unheard_ids': [], 'sent_recordings': [], '_sha': None}
+    return {'uploaded_ids': [], 'unheard_ids': [], 'sent_recordings': [], 'last_messages': [], '_sha': None}
 
 def save_state(state):
     try:
@@ -176,7 +177,19 @@ def fetch_queue_messages():
             time.sleep(0.1)
             continue
 
-        if type_msg not in TEXT_TYPES:
+        # הודעה נערכה — חלץ את הטקסט הנערך וטפל כהודעה חדשה
+        if type_msg in EDITED_TYPES:
+            edited_data = msg_data.get('editedMessageData') or {}
+            edit_text = edited_data.get('textMessage', '') or edited_data.get('text', '')
+            if edit_text.strip():
+                # נשתמש ב-ID חדש (id+_edit) כדי לא לדלג עליו בגלל dedup
+                msg_id = msg_id + '_edit'
+                type_msg = 'textMessage'
+                msg_data['textMessageData'] = {'textMessage': edit_text}
+            else:
+                delete_receipt(rid)
+                continue
+        elif type_msg not in TEXT_TYPES:
             delete_receipt(rid)
             continue
 
@@ -214,6 +227,20 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
                     m.get('idMessage', ''), media_kind, sender_disp, m.get('chatId', ''),
                     m.get('timestamp', 0), False, download_url, m.get('mimeType', ''), m.get('caption', '')
                 ))
+                continue
+            if type_msg in EDITED_TYPES:
+                edited_data = m.get('editedMessageData') or {}
+                edit_text = edited_data.get('textMessage', '') or edited_data.get('text', '')
+                if not edit_text.strip():
+                    continue
+                # ID ייחודי כדי לעלות שוב גם אם ה-ID המקורי כבר ב-uploaded_ids
+                edit_id = m.get('idMessage', '') + '_edit'
+                sender_disp = get_contact_name(m.get('sender', '') or m.get('chatId', ''), m.get('senderName', ''))
+                messages.append({
+                    'id': edit_id, 'type': 'text', 'text': f'[נערך] {edit_text}',
+                    'sender': sender_disp, 'group': m.get('chatId', ''),
+                    'timestamp': m.get('timestamp', 0), 'is_outgoing': False
+                })
                 continue
             if type_msg not in TEXT_TYPES:
                 continue
@@ -451,6 +478,117 @@ def transcribe_hebrew(wav_bytes):
         print(f'שגיאה בתמלול: {e}')
         return ''
 
+
+def ask_ai(user_command, contacts, recent_messages):
+    """מפרש פקודה קולית בעברית ומחזיר dict עם הפעולה לביצוע.
+    מחזיר: {'action': 'send'/'read'/'none', 'chat_id': ..., 'message': ..., 'read_contact': ...}
+    """
+    if not GROQ_API_KEY:
+        return {'action': 'none', 'reason': 'אין GROQ_API_KEY'}
+    
+    contacts_str = '\n'.join([f"  {c['name']}: {c['phone']}" for c in contacts.values()]) or '  (אין אנשי קשר)'
+    recent_str = '\n'.join([
+        f"  [{m.get('sender','')}] {m.get('text','')[:80]}"
+        for m in recent_messages[-5:]
+    ]) if recent_messages else '  (אין הודעות אחרונות)'
+    
+    system_prompt = f"""אתה עוזר שמפרש פקודות קוליות בעברית לשליחת/קריאת הודעות וואטסאפ.
+    
+אנשי קשר שמורים:
+{contacts_str}
+
+5 הודעות אחרונות שהתקבלו:
+{recent_str}
+
+החזר JSON בלבד (ללא הסבר) עם שדות:
+- action: "send" | "read_last" | "none"
+- chat_id: מספר טלפון עם קידומת 972 ו-@c.us (לשליחה בלבד, חפש בשמות אנשי הקשר)
+- message: טקסט ההודעה לשליחה (אם action=send)
+- read_contact: שם איש הקשר שממנו לקרוא (אם action=read_last)
+- error: הסבר אם לא הצלחת להבין
+
+דוגמאות:
+"תשלח לאריאל מה נשמע" → {{"action":"send","chat_id":"972..@c.us","message":"מה נשמע"}}
+"תשמיע לי ההודעה האחרונה משלמה" → {{"action":"read_last","read_contact":"שלמה"}}
+"אני עסוק ואחזור אליך" → {{"action":"send","chat_id":"?","message":"אני עסוק ואחזור אליך"}}"""
+
+    try:
+        r = requests.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            headers={'Authorization': f'Bearer {GROQ_API_KEY}', 'Content-Type': 'application/json'},
+            json={
+                'model': 'llama-3.1-8b-instant',
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_command}
+                ],
+                'temperature': 0.1,
+                'max_tokens': 300,
+                'response_format': {'type': 'json_object'}
+            },
+            timeout=15
+        )
+        if r.status_code == 200:
+            text = r.json()['choices'][0]['message']['content']
+            return json.loads(text)
+        else:
+            print(f'Groq API שגיאה: {r.status_code} {r.text[:100]}')
+            return {'action': 'none', 'reason': f'groq error {r.status_code}'}
+    except Exception as e:
+        print(f'שגיאה ב-ask_ai: {e}')
+        return {'action': 'none', 'reason': str(e)}
+
+
+def handle_ai_command(token, audio_bytes, state):
+    """מקבל הקלטה קולית של פקודה, שולח ל-AI, מבצע את הפקודה, מחזיר תשובה TTS."""
+    # תמלול הפקודה
+    command_text = transcribe_hebrew(audio_bytes).strip()
+    if not command_text:
+        return "לא הצלחתי להבין את הפקודה. נסה שוב."
+    print(f'[AI] פקודה: "{command_text}"')
+    
+    contacts = load_contacts()
+    recent_msgs = state.get('last_messages', [])
+    
+    result = ask_ai(command_text, contacts, recent_msgs)
+    print(f'[AI] תוצאה: {result}')
+    
+    action = result.get('action', 'none')
+    
+    if action == 'send':
+        chat_id = result.get('chat_id', '')
+        message = result.get('message', '')
+        if not chat_id or '?' in chat_id:
+            return f"לא הצלחתי לזהות למי לשלוח. אמרת: {command_text}"
+        if not message:
+            return "לא הצלחתי להבין מה לשלוח."
+        try:
+            sr = requests.post(
+                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                json={'chatId': chat_id, 'message': f'🤖 {message}'}, timeout=30
+            )
+            if sr.status_code == 200 and sr.json().get('idMessage'):
+                return f"ההודעה נשלחה: {message}"
+            else:
+                return "שגיאה בשליחת ההודעה."
+        except Exception as e:
+            return f"שגיאה: {e}"
+    
+    elif action == 'read_last':
+        contact_name = result.get('read_contact', '')
+        # חיפוש ההודעה האחרונה מאיש הקשר
+        for msg in reversed(recent_msgs):
+            sender = msg.get('sender_name', '') or msg.get('sender', '')
+            if contact_name.lower() in sender.lower():
+                text = msg.get('text', '')
+                return f"ההודעה האחרונה מ{sender} היא: {text}"
+        return f"לא מצאתי הודעה אחרונה מ{contact_name}."
+    
+    else:
+        err = result.get('error', '') or result.get('reason', '')
+        return f"לא הצלחתי לפרש את הפקודה. {err}"
+
+
 def resolve_recipient_from_voice(audio_bytes):
     """מתמלל הקלטת קול קצרה (שם/מספר) ומחזיר chat_id ותווית.
     מנסה להתאים לאיש קשר שמור לפי שם, אחרת מניח שזה מספר."""
@@ -533,7 +671,7 @@ def send_recording_to_whatsapp(token, file_path, chat_id, recipient_label, mode,
     return sent_recordings
 
 
-def check_and_send_recordings(token, sent_recordings):
+def check_and_send_recordings(token, sent_recordings, state=None):
     """בודק הקלטות חדשות בשני נתיבים:
     נתיב A (ivr2:2:2) — הקשת מספר/קיצור (ספרות), כרגיל.
     נתיב B (ivr2:2:1) — תמלול שם קולי: קובץ name.wav ← תמלול ← חיפוש בcontacts ← הקלטת ההודעה ב-ivr2:2:1:record.
@@ -739,6 +877,49 @@ def check_and_send_recordings(token, sent_recordings):
             print(f'חסר טקסט או מספר, מדלג על שליחה')
             sent_recordings.add(uid)
 
+    # ===== נתיב AI: שלוחה 2:3 — פקודה קולית חופשית =====
+    try:
+        r_ai = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                             params={'token': token, 'path': 'ivr2:2:3'}, timeout=30)
+        ai_files = sorted(
+            [f for f in r_ai.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+            key=lambda x: x.get('date','')
+        )
+    except Exception as e:
+        print(f'שגיאה בטעינת פקודות AI: {e}')
+        ai_files = []
+
+    for af in ai_files:
+        uid = af.get('uniqueId','')
+        if not uid or uid in sent_recordings:
+            continue
+        print(f'[AI] מעבד פקודה: {af["name"]}')
+        try:
+            dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                               params={'token': token, 'path': f'ivr2:2:3/{af["name"]}'}, timeout=30)
+            audio_bytes = dl.content if dl.status_code == 200 else b''
+        except Exception as e:
+            print(f'שגיאה בהורדת פקודה AI: {e}')
+            audio_bytes = b''
+
+        response_text = handle_ai_command(token, audio_bytes, state)
+        print(f'[AI] תשובה: "{response_text}"')
+
+        # מעלה TTS של התשובה לשלוחה 2:3:result
+        try:
+            requests.post('https://www.call2all.co.il/ym/api/UploadFile',
+                params={'token': token, 'path': 'ivr2:2:3:result', 'tts': '1'},
+                files={'file': ('M_ai_response.tts', response_text.encode('utf-8'), 'text/plain')}, timeout=30)
+        except Exception as e:
+            print(f'שגיאה בהעלאת תשובת AI: {e}')
+
+        sent_recordings.add(uid)
+        try:
+            requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                         params={'token': token, 'path': f'ivr2:2:3/{af["name"]}', 'action': 'delete'}, timeout=30)
+        except Exception:
+            pass
+
     # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
     # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
     # כל קובץ ב-2:1 = הקלטת שם. הקלטת ההודעה עצמה נמצאת ב-2:1:record
@@ -926,7 +1107,7 @@ def main():
 
     print('בודק הקלטות חדשות לשליחה לוואטסאפ...')
     try:
-        sent_recordings = check_and_send_recordings(token, sent_recordings)
+        sent_recordings = check_and_send_recordings(token, sent_recordings, state)
     except Exception as e:
         print(f'שגיאה כללית בבדיקת הקלטות: {e}')
 
@@ -939,6 +1120,10 @@ def main():
 
     state['uploaded_ids'] = list(uploaded_ids)[-1000:]
     state['unheard_ids'] = list(unheard_ids)[-1000:]
+    # שמור 50 הודעות אחרונות לשימוש AI
+    if 'last_messages' not in state:
+        state['last_messages'] = []
+    state['last_messages'] = (state['last_messages'] + all_messages)[-50:]
     state['sent_recordings'] = list(sent_recordings)[-500:]
     save_state(state)
 

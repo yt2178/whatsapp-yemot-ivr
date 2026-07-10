@@ -34,4 +34,5 @@ jobs:
           YEMOT_PASSWORD: ${{ secrets.YEMOT_PASSWORD }}
           YEMOT_EXTENSION: ${{ secrets.YEMOT_EXTENSION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python main.py
