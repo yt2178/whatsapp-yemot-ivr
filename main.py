@@ -12,7 +12,7 @@ YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:4')          # כל ההיסטוריה (מקש 4)
 YEMOT_EXTENSION_NEW = os.environ.get('YEMOT_EXTENSION_NEW', 'ivr2:1')  # הודעות חדשות שלא נשמעו (מקש 1)
-YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:2')  # הקלטות לשליחה לוואטסאפ (מקש 2)
+YEMOT_EXTENSION_RECORD = os.environ.get('YEMOT_EXTENSION_RECORD', 'ivr2:2:2')  # הקלטות לשליחה לוואטסאפ (מקש 2)
 YEMOT_EXTENSION_RESET = os.environ.get('YEMOT_EXTENSION_RESET', 'ivr2:5')  # חיוג לכאן = איפוס תיקיית חדשות (מקש 5)
 CONTACTS_FILE = 'contacts.json'  # קיצורי אנשי קשר (קוד קצר -> שם ומספר)
 RESET_KEYWORD = os.environ.get('RESET_KEYWORD', '#נשמע')  # שולחים הודעה זו כדי לאפס את "החדשות"
@@ -451,31 +451,114 @@ def transcribe_hebrew(wav_bytes):
         print(f'שגיאה בתמלול: {e}')
         return ''
 
+def resolve_recipient_from_voice(audio_bytes):
+    """מתמלל הקלטת קול קצרה (שם/מספר) ומחזיר chat_id ותווית.
+    מנסה להתאים לאיש קשר שמור לפי שם, אחרת מניח שזה מספר."""
+    if not audio_bytes:
+        return None, None
+    text = transcribe_hebrew(audio_bytes).strip()
+    if not text:
+        return None, None
+    print(f'תמלול שם/מספר: "{text}"')
+
+    # 1. נסה להתאים לאיש קשר לפי שם (חיפוש חלקי, case-insensitive)
+    contacts = load_contacts()
+    text_lower = text.lower()
+    best_contact = None
+    best_score = 0
+    for code, c in contacts.items():
+        cname = c.get('name', '').lower()
+        if not cname:
+            continue
+        # ניקוד: כמה מילות השם מופיעות בתמלול
+        words_matched = sum(1 for w in cname.split() if w in text_lower)
+        if words_matched > best_score:
+            best_score = words_matched
+            best_contact = c
+    if best_contact and best_score > 0:
+        chat_id = normalize_phone(best_contact['phone']) + '@c.us'
+        print(f'זוהה איש קשר: {best_contact["name"]} → {chat_id}')
+        return chat_id, best_contact['name']
+
+    # 2. אם התמלול נראה כמספר טלפון (ספרות בלבד)
+    digits_only = ''.join(c for c in text if c.isdigit())
+    if len(digits_only) >= 7:
+        chat_id = normalize_phone(digits_only) + '@c.us'
+        print(f'מספר טלפון מתמלול: {digits_only} → {chat_id}')
+        return chat_id, digits_only
+
+    print(f'לא זוהה נמען מתמלול: "{text}"')
+    return None, None
+
+
+def send_recording_to_whatsapp(token, file_path, chat_id, recipient_label, mode, sent_recordings, uid):
+    """שולח קובץ הקלטה לוואטסאפ. mode=1 קול, mode=2 טקסט מתומלל."""
+    try:
+        dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                           params={'token': token, 'path': file_path}, timeout=30)
+        if dl.status_code != 200 or not dl.content:
+            print(f'שגיאה בהורדת הקלטה {file_path}')
+            return sent_recordings
+
+        sent_ok = False
+        if mode == '2':
+            text = transcribe_hebrew(dl.content)
+            if text:
+                sr = requests.post(
+                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                    json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{text}'}, timeout=30
+                )
+                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                if not sent_ok:
+                    mode = '1'  # נופלים לקול אם תמלול נכשל
+
+        if mode == '1':
+            fname = file_path.split('/')[-1]
+            sr = requests.post(
+                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
+                data={'chatId': chat_id, 'caption': f'📞 הודעה קולית לך מהקו'},
+                files={'file': (fname, dl.content, 'audio/wav')}, timeout=30
+            )
+            sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+
+        if sent_ok:
+            print(f'✅ הקלטה נשלחה ל-{recipient_label} ({chat_id})')
+            sent_recordings.add(uid)
+            requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                         params={'token': token, 'path': file_path, 'action': 'delete'}, timeout=30)
+        else:
+            print(f'❌ שגיאה בשליחה ל-{chat_id}')
+    except Exception as e:
+        print(f'שגיאה בטיפול בהקלטה {file_path}: {e}')
+    return sent_recordings
+
+
 def check_and_send_recordings(token, sent_recordings):
-    """בודק אם יש הקלטות חדשות בשלוחת ההקלטה, ושולח אותן לוואטסאפ (קול או טקסט מתומלל) לפי הספרות שהוקלדו כשם הקובץ.
-    פורמט השם: ספרה ראשונה = מצב (1=קול, 2=טקסט מתומלל), שאר הספרות = מספר הטלפון של הנמען"""
+    """בודק הקלטות חדשות בשני נתיבים:
+    נתיב A (ivr2:2:2) — הקשת מספר/קיצור (ספרות), כרגיל.
+    נתיב B (ivr2:2:1) — תמלול שם קולי: קובץ name.wav ← תמלול ← חיפוש בcontacts ← הקלטת ההודעה ב-ivr2:2:1:record.
+    """
+    # ===== נתיב A: שלוחה 2:2 — הקשת מספר (כרגיל) =====
     try:
         r = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
-                          params={'token': token, 'path': YEMOT_EXTENSION_RECORD}, timeout=30)
-        data = r.json()
-        files = data.get('files', [])
+                          params={'token': token, 'path': 'ivr2:2:2'}, timeout=30)
+        files_a = r.json().get('files', [])
     except Exception as e:
-        print(f'שגיאה בבדיקת שלוחת הקלטות: {e}')
-        return sent_recordings
+        print(f'שגיאה בבדיקת נתיב A: {e}')
+        files_a = []
 
-    for f in files:
+    for f in files_a:
         uid = f.get('uniqueId', '')
         name = f.get('name', '')
         if not uid or uid in sent_recordings:
             continue
-
         raw = name.split('.')[0]
-        if not raw.isdigit() or len(raw) < 8:
-            print(f'שם קובץ לא נראה כמו מספר טלפון, מדלג: {name}')
+        if not raw.isdigit() or len(raw) < 2:
+            print(f'שם קובץ לא תקין בנתיב A, מדלג: {name}')
             sent_recordings.add(uid)
             continue
 
-        # ספרה ראשונה 1/2 = מצב שליחה, אחרת - תאימות לאחור (שולחים כקול)
+        # ספרה ראשונה = מצב (1=קול, 2=טקסט)
         if raw[0] in ('1', '2') and len(raw) >= 2:
             mode = raw[0]
             recipient_raw = raw[1:]
@@ -483,12 +566,11 @@ def check_and_send_recordings(token, sent_recordings):
             mode = '1'
             recipient_raw = raw
 
-        # אם מה שהוקלד קצר (1-3 ספרות) - זה קוד קיצור לאיש קשר שמור, לא מספר טלפון מלא
         if len(recipient_raw) <= 3:
             contacts = load_contacts()
             contact = contacts.get(recipient_raw)
             if not contact:
-                print(f'קוד קיצור לא מוכר: {recipient_raw}, מדלג על הקלטה {name}')
+                print(f'קוד קיצור לא מוכר: {recipient_raw}')
                 sent_recordings.add(uid)
                 continue
             chat_id = normalize_phone(contact['phone']) + '@c.us'
@@ -496,50 +578,73 @@ def check_and_send_recordings(token, sent_recordings):
         else:
             chat_id = normalize_phone(recipient_raw) + '@c.us'
             recipient_label = recipient_raw
-        file_path = f'{YEMOT_EXTENSION_RECORD}/{name}'
 
+        sent_recordings = send_recording_to_whatsapp(
+            token, f'ivr2:2:2/{name}', chat_id, recipient_label, mode, sent_recordings, uid)
+
+    # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
+    # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
+    # כל קובץ ב-2:1 = הקלטת שם. הקלטת ההודעה עצמה נמצאת ב-2:1:record
+    try:
+        r_name = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                               params={'token': token, 'path': 'ivr2:2:1'}, timeout=30)
+        name_files = [f for f in r_name.json().get('files', [])
+                      if f.get('name', '').endswith('.wav') or f.get('name', '').endswith('.opus')]
+        r_rec = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                              params={'token': token, 'path': 'ivr2:2:1:record'}, timeout=30)
+        rec_files = [f for f in r_rec.json().get('files', [])
+                     if f.get('name', '').endswith('.wav') or f.get('name', '').endswith('.opus')]
+    except Exception as e:
+        print(f'שגיאה בבדיקת נתיב B: {e}')
+        name_files, rec_files = [], []
+
+    # ממיינים לפי זמן (הישן קודם) ומשייכים לפי סדר: name_file[i] ↔ rec_file[i]
+    name_files.sort(key=lambda x: x.get('date', ''))
+    rec_files.sort(key=lambda x: x.get('date', ''))
+
+    for i, nf in enumerate(name_files):
+        uid = nf.get('uniqueId', '')
+        if not uid or uid in sent_recordings:
+            continue
+        if i >= len(rec_files):
+            print(f'אין הקלטת הודעה מקבילה לשם קובץ {nf["name"]}, ממתין לrun הבא')
+            break
+
+        rf = rec_files[i]
+        rec_uid = rf.get('uniqueId', '')
+        if rec_uid in sent_recordings:
+            sent_recordings.add(uid)
+            continue
+
+        print(f'נתיב B: מתמלל שם מ-{nf["name"]}...')
         try:
-            dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
-                               params={'token': token, 'path': file_path}, timeout=30)
-            if dl.status_code != 200 or not dl.content:
-                print(f'שגיאה בהורדת הקלטה {name}')
-                continue
-
-            sent_ok = False
-            if mode == '2':
-                # מצב טקסט: מתמללים ושולחים כהודעת טקסט רגילה
-                text = transcribe_hebrew(dl.content)
-                if text:
-                    sr = requests.post(
-                        f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
-                        json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{text}'}, timeout=30
-                    )
-                    sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
-                    if not sent_ok:
-                        print(f'שגיאה בשליחת טקסט מתומלל ל-{chat_id}: {sr.text[:200]}')
-                else:
-                    print(f'לא הצלחתי לתמלל את ההקלטה {name}, שולח כקול במקום')
-                    mode = '1'  # נופלים חזרה לשליחה כקול
-
-            if mode == '1':
-                files_payload = {'file': (name, dl.content, 'audio/wav')}
-                data_payload = {'chatId': chat_id, 'caption': 'הודעה קולית חדשה מהקו'}
-                sr = requests.post(
-                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
-                    data=data_payload, files=files_payload, timeout=30
-                )
-                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
-                if not sent_ok:
-                    print(f'שגיאה בשליחת הקלטה ל-{chat_id}: {sr.text[:200]}')
-
-            if sent_ok:
-                print(f'הקלטה נשלחה בהצלחה ל-{chat_id} (מצב {mode}): {name}')
-                sent_recordings.add(uid)
-                # מוחקים את הקובץ מהשלוחה כדי לפנות את השם למקרה הבא ולמנוע שליחה כפולה
-                requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                             params={'token': token, 'path': file_path, 'action': 'delete'}, timeout=30)
+            dl_name = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                    params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}'}, timeout=30)
+            chat_id, recipient_label = resolve_recipient_from_voice(dl_name.content if dl_name.status_code == 200 else b'')
         except Exception as e:
-            print(f'שגיאה בטיפול בהקלטה {name}: {e}')
+            print(f'שגיאה בהורדת הקלטת שם: {e}')
+            chat_id, recipient_label = None, None
+
+        if not chat_id:
+            print(f'לא זוהה נמען, מדלג')
+            sent_recordings.add(uid)
+            sent_recordings.add(rec_uid)
+            requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                         params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}', 'action': 'delete'}, timeout=30)
+            requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                         params={'token': token, 'path': f'ivr2:2:1:record/{rf["name"]}', 'action': 'delete'}, timeout=30)
+            continue
+
+        # שולחים את ההקלטה (תמיד קול ב-נתיב B)
+        sent_recordings = send_recording_to_whatsapp(
+            token, f'ivr2:2:1:record/{rf["name"]}', chat_id, recipient_label, '1', sent_recordings, rec_uid)
+        sent_recordings.add(uid)
+        # מוחקים גם את הקלטת השם
+        try:
+            requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                         params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}', 'action': 'delete'}, timeout=30)
+        except Exception:
+            pass
 
     return sent_recordings
 
