@@ -688,4 +688,52 @@ def main():
     print('סיום ✅')
 
 if __name__ == '__main__':
-    main()
+    import sys
+    if os.environ.get('RESET_ONLY') == '1':
+        # מופעל מ-reset workflow (ימות → GitHub Actions reset.yml)
+        print('=== מצב איפוס בלבד ===')
+        try:
+            r = requests.get('https://www.call2all.co.il/ym/api/Login',
+                             params={'username': YEMOT_USERNAME, 'password': YEMOT_PASSWORD}, timeout=30)
+            token = r.json().get('token')
+        except Exception as e:
+            print(f'שגיאה בהתחברות לימות: {e}')
+            sys.exit(1)
+        
+        print('מאפס תיקיית חדשות...')
+        clear_new_folder(token)
+        import time as _time
+        _time.sleep(2)
+        
+        # בדיקה שאכן ריק
+        try:
+            rcheck = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                                  params={'token': token, 'path': YEMOT_EXTENSION_NEW}, timeout=30)
+            remaining = len(rcheck.json().get('files', []))
+            success = (remaining == 0)
+            print(f'קבצים שנשארו: {remaining}')
+        except Exception:
+            success = True
+        
+        # עדכון state.json — ניקוי unheard_ids
+        state = load_state()
+        state['unheard_ids'] = []
+        save_state(state)
+        
+        # השמעת TTS אישור: מעלים לשלוחה 1 הודעת אישור שתישמע מיד
+        if success:
+            ok_msg = 'התיקייה אופסה בהצלחה. כעת אין הודעות חדשות.'
+        else:
+            ok_msg = 'האיפוס בוצע. ייתכן שנשארו מספר קבצים.'
+        try:
+            requests.post('https://www.call2all.co.il/ym/api/UploadFile',
+                          params={'token': token, 'path': YEMOT_EXTENSION_NEW, 'tts': '1', 'autoNumbering': '1'},
+                          files={'file': ('confirm.txt', ok_msg.encode('utf-8'), 'text/plain')},
+                          timeout=30)
+        except Exception:
+            pass
+        
+        print(f'✅ איפוס {"הצליח" if success else "בוצע (חלקי)"}')
+        sys.exit(0)
+    else:
+        main()

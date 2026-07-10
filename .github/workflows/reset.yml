@@ -1,0 +1,33 @@
+name: Reset New Messages
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: whatsapp-yemot-processor
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run reset
+        env:
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
+          YEMOT_USERNAME: ${{ secrets.YEMOT_USERNAME }}
+          YEMOT_PASSWORD: ${{ secrets.YEMOT_PASSWORD }}
+          YEMOT_EXTENSION: ${{ secrets.YEMOT_EXTENSION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESET_ONLY: "1"
+        run: python main.py
