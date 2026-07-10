@@ -5,10 +5,6 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
-concurrency:
-  group: whatsapp-yemot-processor
-  cancel-in-progress: false
-
 jobs:
   process:
     runs-on: ubuntu-latest
@@ -25,7 +21,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /usr/bin/ffmpeg
-          key: ffmpeg-ubuntu-noble
+          key: ffmpeg-ubuntu-noble-v1
 
       - name: Install ffmpeg
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
@@ -35,7 +31,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}-v2
+          key: pip-faster-whisper-v3
           restore-keys: pip-
 
       - name: Install dependencies
