@@ -68,13 +68,25 @@ def analyze_with_gemini(text):
         print(f"❌ שגיאה בפענוח תגובת Gemini: {e}")
         return None
 
+import json
+
+def load_contacts():
+    try:
+        if os.path.exists("contacts.json"):
+            with open("contacts.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"שגיאה בטעינת אנשי קשר: {e}")
+    return {}
+
 def send_whatsapp(data):
     if not data or not data.get("message_to_send"):
         print("❌ אין מספיק נתונים לשליחת הודעה.")
         return
     
+    contacts = load_contacts()
     target_name = data.get("name", "")
-    target_phone = data.get("phone_number") or contacts.get(target_name)
+    target_phone = data.get("phone_number") or contacts.get(target_name, {}).get("phone", "")
     
     if not target_phone:
         print(f"❌ לא נמצא מספר טלפון עבור איש הקשר: {target_name}")

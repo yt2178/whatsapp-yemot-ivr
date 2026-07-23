@@ -289,9 +289,45 @@ def fetch_history_messages(minutes=HISTORY_MINUTES):
 
     return messages
 
+def generate_tts_wav(text):
+    """מייצר קובץ שמע קולי בעברית באיכות גבוהה בעזרת edge-tts (קול אנושי טבעי של Microsoft).
+    מחזיר bytes של שמע או None אם נכשל/לא מותקן"""
+    if not text or not text.strip():
+        return None
+    try:
+        import asyncio
+        import edge_tts
+        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+            mp3_path = f.name
+        asyncio.run(edge_tts.Communicate(text, 'he-IL-AvriNeural').save(mp3_path))
+        with open(mp3_path, 'rb') as f:
+            audio_bytes = f.read()
+        try:
+            os.remove(mp3_path)
+        except Exception:
+            pass
+        if audio_bytes and len(audio_bytes) > 100:
+            return audio_bytes
+    except Exception as e:
+        print(f'edge-tts fallback ל-TTS של ימות: {e}')
+    return None
+
 def upload_to_yemot(text, sender, token, path):
     try:
         tts_text = f'{sender}: {text}' if sender else text
+        audio_bytes = generate_tts_wav(tts_text)
+        if audio_bytes:
+            r = requests.post(
+                'https://www.call2all.co.il/ym/api/UploadFile',
+                params={'token': token, 'path': path, 'autoNumbering': '1', 'convertAudio': '1'},
+                files={'file': ('msg.mp3', audio_bytes, 'audio/mp3')},
+                timeout=60
+            )
+            res = r.json()
+            if res.get('path'):
+                return res
+
+        # Fallback ל-TTS המובנה של ימות המשיח אם edge-tts לא היה זמין
         r = requests.post(
             'https://www.call2all.co.il/ym/api/UploadFile',
             params={'token': token, 'path': path, 'tts': '1', 'autoNumbering': '1'},
@@ -878,48 +914,48 @@ def check_and_send_recordings(token, sent_recordings, state=None):
             print(f'חסר טקסט או מספר, מדלג על שליחה')
             sent_recordings.add(uid)
 
-    # ===== נתיב AI: שלוחה 2:3 — פקודה קולית חופשית =====
-    try:
-        r_ai = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
-                             params={'token': token, 'path': 'ivr2:2:3'}, timeout=30)
-        ai_files = sorted(
-            [f for f in r_ai.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
-            key=lambda x: x.get('date','')
-        )
-    except Exception as e:
-        print(f'שגיאה בטעינת פקודות AI: {e}')
-        ai_files = []
-
-    for af in ai_files:
-        uid = af.get('uniqueId','')
-        if not uid or uid in sent_recordings:
-            continue
-        print(f'[AI] מעבד פקודה: {af["name"]}')
+    # ===== נתיב AI: שלוחה 2:3 ו-שלוחה 3 — פקודה קולית חופשית =====
+    ai_targets = [('ivr2:2:3', 'ivr2:2:3:result'), ('ivr2:3', 'ivr2:3:result')]
+    for in_path, out_path in ai_targets:
         try:
-            dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
-                               params={'token': token, 'path': f'ivr2:2:3/{af["name"]}'}, timeout=30)
-            audio_bytes = dl.content if dl.status_code == 200 else b''
+            r_ai = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                                 params={'token': token, 'path': in_path}, timeout=30)
+            ai_files = sorted(
+                [f for f in r_ai.json().get('files', []) if f.get('name','').endswith(('.wav','.opus'))],
+                key=lambda x: x.get('date','')
+            )
         except Exception as e:
-            print(f'שגיאה בהורדת פקודה AI: {e}')
-            audio_bytes = b''
+            print(f'שגיאה בטעינת פקודות AI מ-{in_path}: {e}')
+            ai_files = []
 
-        response_text = handle_ai_command(token, audio_bytes, state)
-        print(f'[AI] תשובה: "{response_text}"')
+        for af in ai_files:
+            uid = af.get('uniqueId','')
+            if not uid or uid in sent_recordings:
+                continue
+            print(f'[AI] מעבד פקודה מ-{in_path}: {af["name"]}')
+            try:
+                dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
+                                   params={'token': token, 'path': f'{in_path}/{af["name"]}'}, timeout=30)
+                audio_bytes = dl.content if dl.status_code == 200 else b''
+            except Exception as e:
+                print(f'שגיאה בהורדת פקודה AI: {e}')
+                audio_bytes = b''
 
-        # מעלה TTS של התשובה לשלוחה 2:3:result
-        try:
-            requests.post('https://www.call2all.co.il/ym/api/UploadFile',
-                params={'token': token, 'path': 'ivr2:2:3:result', 'tts': '1'},
-                files={'file': ('M_ai_response.tts', response_text.encode('utf-8'), 'text/plain')}, timeout=30)
-        except Exception as e:
-            print(f'שגיאה בהעלאת תשובת AI: {e}')
+            response_text = handle_ai_command(token, audio_bytes, state)
+            print(f'[AI] תשובה: "{response_text}"')
 
-        sent_recordings.add(uid)
-        try:
-            requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                         params={'token': token, 'path': f'ivr2:2:3/{af["name"]}', 'action': 'delete'}, timeout=30)
-        except Exception:
-            pass
+            # מעלה TTS של התשובה (בקול אנושי בעזרת edge-tts)
+            try:
+                upload_to_yemot(response_text, '', token, out_path)
+            except Exception as e:
+                print(f'שגיאה בהעלאת תשובת AI: {e}')
+
+            sent_recordings.add(uid)
+            try:
+                requests.get('https://www.call2all.co.il/ym/api/FileAction',
+                             params={'token': token, 'path': f'{in_path}/{af["name"]}', 'action': 'delete'}, timeout=30)
+            except Exception:
+                pass
 
     # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
     # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
