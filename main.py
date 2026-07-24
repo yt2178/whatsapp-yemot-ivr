@@ -982,9 +982,8 @@ def check_and_send_recordings(token, sent_recordings, state=None):
 
     # ===== נתיב AI: שלוחה 2:3 ו-שלוחה 3 — פקודה קולית חופשית =====
     ai_targets = [
-        ('ivr2:3/1', 'ivr2:3/2'),
-        ('ivr2:3', 'ivr2:3/2'),
-        ('ivr2:3', 'ivr2:3:result'),
+        ('ivr2:3', 'ivr2:3/1'),
+        ('ivr2:3/1', 'ivr2:3/1'),
         ('ivr2:2:3', 'ivr2:2:3:result')
     ]
     for in_path, out_path in ai_targets:
