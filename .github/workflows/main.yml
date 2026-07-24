@@ -39,6 +39,8 @@ jobs:
         env:
           GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
           GREEN_API_TOKEN: ${{ secrets.GREEN_API_TOKEN }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          META_PHONE_NUMBER_ID: ${{ secrets.META_PHONE_NUMBER_ID }}
           YEMOT_USERNAME: ${{ secrets.YEMOT_USERNAME }}
           YEMOT_PASSWORD: ${{ secrets.YEMOT_PASSWORD }}
           YEMOT_EXTENSION: ${{ secrets.YEMOT_EXTENSION }}

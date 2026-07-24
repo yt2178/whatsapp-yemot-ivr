@@ -6,8 +6,10 @@ import tempfile
 import subprocess
 from base64 import b64encode, b64decode
 
-GREEN_API_INSTANCE_ID = os.environ['GREEN_API_INSTANCE_ID']
-GREEN_API_TOKEN = os.environ['GREEN_API_TOKEN']
+GREEN_API_INSTANCE_ID = os.environ.get('GREEN_API_INSTANCE_ID', '')
+GREEN_API_TOKEN = os.environ.get('GREEN_API_TOKEN', '')
+META_ACCESS_TOKEN = os.environ.get('META_ACCESS_TOKEN', 'EAAPFPWV7ag4BSHWhqltDC7nqSiTZCuHpOltPgYT5Q4B6qtd9cFTwSq2W3VhSZBz1qDCmXE6ul7JdS5UlPMPIwlCQEsBWrgVsW3Nkdu7TBQrDGmlw29YiWCPTth68Cjgrl6s3IfjmZCMukwX9Kyj9Ub9vB7fOL5mKaNN9ZBX2TGcjA4GwGEcffO3ZBjDekzdbDVGykriAydxm6UYEb2t8LHzBKQJqo8EINM81LXIKShlemULYkZBH4W6uQ21gc3CBimP4uZAyo8YInCIfjD18dtGkiAc')
+META_PHONE_NUMBER_ID = os.environ.get('META_PHONE_NUMBER_ID', '1281252485060445')
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
 YEMOT_EXTENSION = os.environ.get('YEMOT_EXTENSION', 'ivr2:4')          # כל ההיסטוריה (מקש 4)
