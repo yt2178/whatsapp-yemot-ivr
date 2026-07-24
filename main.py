@@ -316,6 +316,17 @@ def generate_tts_wav(text):
 
 def upload_to_yemot(text, sender, token, path):
     try:
+        # מנקים קבצים ישנים בשלוחת התוצאות כדי למנוע צפצופים/ניגון קבצים ישנים
+        if 'result' in path or path.endswith('/2'):
+            try:
+                r_dir = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir', params={'token': token, 'path': path}, timeout=15)
+                for f in r_dir.json().get('files', []):
+                    fname = f.get('name')
+                    if fname and fname.endswith(('.wav', '.opus', '.mp3', '.tts')):
+                        requests.get('https://www.call2all.co.il/ym/api/FileAction', params={'token': token, 'path': f'{path}/{fname}', 'action': 'delete'}, timeout=15)
+            except Exception:
+                pass
+
         tts_text = f'{sender}: {text}' if sender else text
         audio_bytes = generate_tts_wav(tts_text)
         if audio_bytes:
