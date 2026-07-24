@@ -600,10 +600,31 @@ def handle_ai_command(token, audio_bytes, state):
     contacts = load_contacts()
     recent_msgs = state.get('last_messages', [])
     
+    # 1. ניסיון פירוש ב-Groq/Gemini AI
     result = ask_ai(command_text, contacts, recent_msgs)
     print(f'[AI] תוצאה: {result}')
     
     action = result.get('action', 'none')
+    
+    # 2. גיבוי חכם: אם ה-AI לא החזיר action (או שחסר מפתח AI), חולצים מספרים בלוקאלי ב-Regex
+    if action not in ('send', 'read_last'):
+        import re
+        digits_match = re.findall(r'\d+', command_text)
+        joint_digits = ''.join(digits_match)
+        if joint_digits.startswith('972') or joint_digits.startswith('05'):
+            clean_digits = normalize_phone(joint_digits)
+            # מנקים את המספר מתוך הטקסט כדי לקבל את הודעת המקור
+            clean_msg = re.sub(r'[\d\.\-\+]+', '', command_text).replace('תשלח ל', '').replace('תשלח', '').replace('שליחה ל', '').strip()
+            if not clean_msg:
+                clean_msg = 'הודעה קולית מהקו'
+            result = {
+                'action': 'send',
+                'phone_number': clean_digits,
+                'chat_id': clean_digits + '@c.us',
+                'message': clean_msg
+            }
+            action = 'send'
+            print(f'[AI Fallback Regex] זיהה מספר: {clean_digits}, הודעה: "{clean_msg}"')
     
     if action == 'send':
         phone_num = result.get('phone_number', '') or result.get('chat_id', '')
