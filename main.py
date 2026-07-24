@@ -959,44 +959,44 @@ def check_and_send_recordings(token, sent_recordings, state=None):
             except Exception:
                 pass
 
-    # ===== נתיב B: שלוחה 2:1 — תמלול שם קולי =====
-    # בשלוחה 2:1 יש קבצי קול ששמם = מספר אוטומטי (ימות מקצה מספר רץ)
-    # כל קובץ ב-2:1 = הקלטת שם. הקלטת ההודעה עצמה נמצאת ב-2:1:record
-    try:
-        r_name = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
-                               params={'token': token, 'path': 'ivr2:2:1'}, timeout=30)
-        name_files = [f for f in r_name.json().get('files', [])
-                      if f.get('name', '').endswith('.wav') or f.get('name', '').endswith('.opus')]
-        r_rec = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
-                              params={'token': token, 'path': 'ivr2:2:1:record'}, timeout=30)
-        rec_files = [f for f in r_rec.json().get('files', [])
-                     if f.get('name', '').endswith('.wav') or f.get('name', '').endswith('.opus')]
-    except Exception as e:
-        print(f'שגיאה בבדיקת נתיב B: {e}')
-        name_files, rec_files = [], []
+    # ===== נתיב B: שלוחה 2/1 — תמלול שם קולי =====
+    name_entries, rec_entries = [], []
+    for p_name, p_rec in [('ivr2:2/1', 'ivr2:2/1/record'), ('ivr2:2:1', 'ivr2:2:1:record')]:
+        try:
+            rn = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                              params={'token': token, 'path': p_name}, timeout=30)
+            n_list = [(f, p_name) for f in rn.json().get('files', [])
+                      if f.get('name', '').endswith(('.wav', '.opus'))]
+            rr = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir',
+                              params={'token': token, 'path': p_rec}, timeout=30)
+            r_list = [(f, p_rec) for f in rr.json().get('files', [])
+                      if f.get('name', '').endswith(('.wav', '.opus'))]
+            name_entries.extend(n_list)
+            rec_entries.extend(r_list)
+        except Exception as e:
+            print(f'שגיאה בבדיקת נתיב B ({p_name}): {e}')
 
-    # ממיינים לפי זמן (הישן קודם) ומשייכים לפי סדר: name_file[i] ↔ rec_file[i]
-    name_files.sort(key=lambda x: x.get('date', ''))
-    rec_files.sort(key=lambda x: x.get('date', ''))
+    name_entries.sort(key=lambda x: x[0].get('date', ''))
+    rec_entries.sort(key=lambda x: x[0].get('date', ''))
 
-    for i, nf in enumerate(name_files):
+    for i, (nf, p_name) in enumerate(name_entries):
         uid = nf.get('uniqueId', '')
         if not uid or uid in sent_recordings:
             continue
-        if i >= len(rec_files):
+        if i >= len(rec_entries):
             print(f'אין הקלטת הודעה מקבילה לשם קובץ {nf["name"]}, ממתין לrun הבא')
             break
 
-        rf = rec_files[i]
+        rf, p_rec = rec_entries[i]
         rec_uid = rf.get('uniqueId', '')
         if rec_uid in sent_recordings:
             sent_recordings.add(uid)
             continue
 
-        print(f'נתיב B: מתמלל שם מ-{nf["name"]}...')
+        print(f'נתיב B: מתמלל שם מ-{p_name}/{nf["name"]}...')
         try:
             dl_name = requests.get('https://www.call2all.co.il/ym/api/DownloadFile',
-                                    params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}'}, timeout=30)
+                                    params={'token': token, 'path': f'{p_name}/{nf["name"]}'}, timeout=30)
             chat_id, recipient_label = resolve_recipient_from_voice(dl_name.content if dl_name.status_code == 200 else b'')
         except Exception as e:
             print(f'שגיאה בהורדת הקלטת שם: {e}')
@@ -1007,19 +1007,19 @@ def check_and_send_recordings(token, sent_recordings, state=None):
             sent_recordings.add(uid)
             sent_recordings.add(rec_uid)
             requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                         params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}', 'action': 'delete'}, timeout=30)
+                         params={'token': token, 'path': f'{p_name}/{nf["name"]}', 'action': 'delete'}, timeout=30)
             requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                         params={'token': token, 'path': f'ivr2:2:1:record/{rf["name"]}', 'action': 'delete'}, timeout=30)
+                         params={'token': token, 'path': f'{p_rec}/{rf["name"]}', 'action': 'delete'}, timeout=30)
             continue
 
         # שולחים את ההקלטה (תמיד קול ב-נתיב B)
         sent_recordings = send_recording_to_whatsapp(
-            token, f'ivr2:2:1:record/{rf["name"]}', chat_id, recipient_label, '1', sent_recordings, rec_uid)
+            token, f'{p_rec}/{rf["name"]}', chat_id, recipient_label, '1', sent_recordings, rec_uid)
         sent_recordings.add(uid)
         # מוחקים גם את הקלטת השם
         try:
             requests.get('https://www.call2all.co.il/ym/api/FileAction',
-                         params={'token': token, 'path': f'ivr2:2:1/{nf["name"]}', 'action': 'delete'}, timeout=30)
+                         params={'token': token, 'path': f'{p_name}/{nf["name"]}', 'action': 'delete'}, timeout=30)
         except Exception:
             pass
 
