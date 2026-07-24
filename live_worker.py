@@ -38,6 +38,17 @@ while True:
             for af in ai_files:
                 fname = af.get('name')
                 print(f"[Worker] Found new AI recording: {fname}")
+                
+                # מנקים מיד את שלוחת התשובות (ivr2:3/1) מקבצים ישנים כדי שהמאזין ישמע מוזיקה בלבד עד לתשובה החדשה
+                try:
+                    r_clean = requests.get('https://www.call2all.co.il/ym/api/GetIVR2Dir', params={'token': token, 'path': 'ivr2:3/1'}, timeout=10)
+                    for old_f in r_clean.json().get('files', []):
+                        old_name = old_f.get('name')
+                        requests.get('https://www.call2all.co.il/ym/api/FileAction', params={'token': token, 'path': f'ivr2:3/1/{old_name}', 'action': 'delete'}, timeout=10)
+                    print("[Worker] Cleaned all old response files from ivr2:3/1")
+                except Exception as e:
+                    print(f"[Worker Clean Error] {e}")
+
                 dl = requests.get('https://www.call2all.co.il/ym/api/DownloadFile', params={'token': token, 'path': f"ivr2:3/{fname}"}, timeout=15)
                 audio_bytes = dl.content if dl.status_code == 200 else b''
                 
