@@ -541,15 +541,16 @@ def ask_ai(user_command, contacts, recent_messages):
 
 החזר JSON בלבד (ללא הסבר) עם שדות:
 - action: "send" | "read_last" | "none"
-- chat_id: מספר טלפון עם קידומת 972 ו-@c.us (לשליחה בלבד, חפש בשמות אנשי הקשר)
-- message: טקסט ההודעה לשליחה (אם action=send)
+- phone_number: אם אופס או הוזכר מספר טלפון בהקלטה (למשל 0526751178), חלץ אותו למספר נקי. אם הוזכר שם איש קשר (למשל אריאל), מצא את המספר שלו מאנשי הקשר.
+- chat_id: מספר טלפון בפורמט 972...0@c.us אם ידוע
+- message: טקסט ההודעה המדויק שיש לשלוח (אם action=send)
 - read_contact: שם איש הקשר שממנו לקרוא (אם action=read_last)
-- error: הסבר אם לא הצלחת להבין
+- error: הסבר קצר אם לא הצלחת להבין
 
 דוגמאות:
-"תשלח לאריאל מה נשמע" → {{"action":"send","chat_id":"972..@c.us","message":"מה נשמע"}}
-"תשמיע לי ההודעה האחרונה משלמה" → {{"action":"read_last","read_contact":"שלמה"}}
-"אני עסוק ואחזור אליך" → {{"action":"send","chat_id":"?","message":"אני עסוק ואחזור אליך"}}"""
+"תשלח ל-0526751178 שאני בדרך" → {{"action":"send","phone_number":"0526751178","chat_id":"972526751178@c.us","message":"אני בדרך"}}
+"תשלח לאריאל מה נשמע" → {{"action":"send","phone_number":"0501234567","chat_id":"972501234567@c.us","message":"מה נשמע"}}
+"תשמיע לי ההודעה האחרונה משלמה" → {{"action":"read_last","read_contact":"שלמה"}}"""
 
     try:
         r = requests.post(
@@ -580,7 +581,6 @@ def ask_ai(user_command, contacts, recent_messages):
 
 def handle_ai_command(token, audio_bytes, state):
     """מקבל הקלטה קולית של פקודה, שולח ל-AI, מבצע את הפקודה, מחזיר תשובה TTS."""
-    # תמלול הפקודה
     command_text = transcribe_hebrew(audio_bytes).strip()
     if not command_text:
         return "לא הצלחתי להבין את הפקודה. נסה שוב."
@@ -595,23 +595,55 @@ def handle_ai_command(token, audio_bytes, state):
     action = result.get('action', 'none')
     
     if action == 'send':
-        chat_id = result.get('chat_id', '')
+        phone_num = result.get('phone_number', '') or result.get('chat_id', '')
+        digits_only = ''.join(c for c in phone_num if c.isdigit())
         message = result.get('message', '')
-        if not chat_id or '?' in chat_id:
-            return f"לא הצלחתי לזהות למי לשלוח. אמרת: {command_text}"
+        if not digits_only or len(digits_only) < 7:
+            return f"לא הצלחתי לזהות מספר טלפון לשליחה. אמרת: {command_text}"
         if not message:
-            return "לא הצלחתי להבין מה לשלוח."
-        try:
-            sr = requests.post(
-                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
-                json={'chatId': chat_id, 'message': f'🤖 {message}'}, timeout=30
-            )
-            if sr.status_code == 200 and sr.json().get('idMessage'):
-                return f"ההודעה נשלחה: {message}"
-            else:
-                return "שגיאה בשליחת ההודעה."
-        except Exception as e:
-            return f"שגיאה: {e}"
+            return "לא הצלחתי להבין מה הטקסט לשליחה."
+        
+        target_phone = normalize_phone(digits_only)
+        chat_id = target_phone + '@c.us'
+        outbound_msg = f'🤖 {message}'
+        
+        sent_ok = False
+        # 1. ניסיון שליחה ב-Meta Cloud API הרשמי
+        if META_ACCESS_TOKEN and META_PHONE_NUMBER_ID:
+            try:
+                url = f'https://graph.facebook.com/v20.0/{META_PHONE_NUMBER_ID}/messages'
+                headers = {'Authorization': f'Bearer {META_ACCESS_TOKEN}', 'Content-Type': 'application/json'}
+                payload = {
+                    'messaging_product': 'whatsapp',
+                    'recipient_type': 'individual',
+                    'to': target_phone,
+                    'type': 'text',
+                    'text': {'body': outbound_msg}
+                }
+                meta_res = requests.post(url, headers=headers, json=payload, timeout=30)
+                if meta_res.status_code == 200:
+                    print(f'✅ הודעת AI נשלחה ב-Meta Cloud API ל-{target_phone}')
+                    sent_ok = True
+                else:
+                    print(f'שגיאת Meta API בשליחת AI: {meta_res.status_code} {meta_res.text[:150]}')
+            except Exception as e:
+                print(f'חריגה ב-Meta API: {e}')
+        
+        # 2. ניסיון גיבוי ב-Green API
+        if not sent_ok and GREEN_API_INSTANCE_ID and GREEN_API_TOKEN:
+            try:
+                sr = requests.post(
+                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                    json={'chatId': chat_id, 'message': outbound_msg}, timeout=30
+                )
+                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+            except Exception as e:
+                print(f'שגיאת Green API בשליחת AI: {e}')
+        
+        if sent_ok:
+            return f"ההודעה נשלחה בהצלחה למספר {digits_only}: {message}"
+        else:
+            return f"לא הצלחתי לשלוח את ההודעה למספר {digits_only}."
     
     elif action == 'read_last':
         contact_name = result.get('read_contact', '')
