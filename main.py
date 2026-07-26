@@ -8,7 +8,7 @@ from base64 import b64encode, b64decode
 
 GREEN_API_INSTANCE_ID = os.environ.get('GREEN_API_INSTANCE_ID', '')
 GREEN_API_TOKEN = os.environ.get('GREEN_API_TOKEN', '')
-META_ACCESS_TOKEN = os.environ.get('META_ACCESS_TOKEN', 'EAAPFPWV7ag4BSHWhqltDC7nqSiTZCuHpOltPgYT5Q4B6qtd9cFTwSq2W3VhSZBz1qDCmXE6ul7JdS5UlPMPIwlCQEsBWrgVsW3Nkdu7TBQrDGmlw29YiWCPTth68Cjgrl6s3IfjmZCMukwX9Kyj9Ub9vB7fOL5mKaNN9ZBX2TGcjA4GwGEcffO3ZBjDekzdbDVGykriAydxm6UYEb2t8LHzBKQJqo8EINM81LXIKShlemULYkZBH4W6uQ21gc3CBimP4uZAyo8YInCIfjD18dtGkiAc')
+META_ACCESS_TOKEN = os.environ.get('META_ACCESS_TOKEN', '')  # הכנס ב-GitHub Secrets
 META_PHONE_NUMBER_ID = os.environ.get('META_PHONE_NUMBER_ID', '1281252485060445')
 YEMOT_USERNAME = os.environ['YEMOT_USERNAME']
 YEMOT_PASSWORD = os.environ['YEMOT_PASSWORD']
@@ -533,61 +533,66 @@ def ask_ai(user_command, contacts, recent_messages):
     """מפרש פקודה קולית בעברית ומחזיר dict עם הפעולה לביצוע.
     מחזיר: {'action': 'send'/'read'/'none', 'chat_id': ..., 'message': ..., 'read_contact': ...}
     """
-    if not GROQ_API_KEY:
-        return {'action': 'none', 'reason': 'אין GROQ_API_KEY'}
-    
+    # מפתחות Gemini — מגיעים מ-GitHub Secrets
+    GEMINI_KEYS = [k for k in [
+        os.environ.get('GEMINI_API_KEY', ''),
+        os.environ.get('GEMINI_API_KEY_2', ''),
+        os.environ.get('GEMINI_API_KEY_3', ''),
+        os.environ.get('GEMINI_API_KEY_4', ''),
+    ] if k]
+
     contacts_str = '\n'.join([f"  {c['name']}: {c['phone']}" for c in contacts.values()]) or '  (אין אנשי קשר)'
     recent_str = '\n'.join([
         f"  [{m.get('sender','')}] {m.get('text','')[:80]}"
         for m in recent_messages[-5:]
     ]) if recent_messages else '  (אין הודעות אחרונות)'
-    
-    system_prompt = f"""אתה עוזר שמפרש פקודות קוליות בעברית לשליחת/קריאת הודעות וואטסאפ.
-    
+
+    prompt = f"""אתה עוזר שמפרש פקודות קוליות בעברית לשליחת/קריאת הודעות וואטסאפ.
+
 אנשי קשר שמורים:
 {contacts_str}
 
 5 הודעות אחרונות שהתקבלו:
 {recent_str}
 
+הפקודה שהמשתמש אמר: "{user_command}"
+
 החזר JSON בלבד (ללא הסבר) עם שדות:
 - action: "send" | "read_last" | "none"
-- phone_number: אם אופס או הוזכר מספר טלפון בהקלטה (למשל 0526751178), חלץ אותו למספר נקי. אם הוזכר שם איש קשר (למשל אריאל), מצא את המספר שלו מאנשי הקשר.
-- chat_id: מספר טלפון בפורמט 972...0@c.us אם ידוע
-- message: טקסט ההודעה המדויק שיש לשלוח (אם action=send)
-- read_contact: שם איש הקשר שממנו לקרוא (אם action=read_last)
-- error: הסבר קצר אם לא הצלחת להבין
+- phone_number: מספר טלפון נקי (ספרות בלבד, למשל 0526751178). חלץ מהפקודה אם הוזכר מספר.
+- chat_id: בפורמט 972XXXXXXXXX@c.us
+- message: טקסט ההודעה שיש לשלוח (אם action=send)
+- read_contact: שם איש הקשר (אם action=read_last)
+- error: הסבר אם לא הצלחת
 
 דוגמאות:
 "תשלח ל-0526751178 שאני בדרך" → {{"action":"send","phone_number":"0526751178","chat_id":"972526751178@c.us","message":"אני בדרך"}}
 "תשלח לאריאל מה נשמע" → {{"action":"send","phone_number":"0501234567","chat_id":"972501234567@c.us","message":"מה נשמע"}}
 "תשמיע לי ההודעה האחרונה משלמה" → {{"action":"read_last","read_contact":"שלמה"}}"""
 
-    try:
-        r = requests.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            headers={'Authorization': f'Bearer {GROQ_API_KEY}', 'Content-Type': 'application/json'},
-            json={
-                'model': 'llama-3.1-8b-instant',
-                'messages': [
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': user_command}
-                ],
-                'temperature': 0.1,
-                'max_tokens': 300,
-                'response_format': {'type': 'json_object'}
-            },
-            timeout=15
-        )
-        if r.status_code == 200:
-            text = r.json()['choices'][0]['message']['content']
-            return json.loads(text)
-        else:
-            print(f'Groq API שגיאה: {r.status_code} {r.text[:100]}')
-            return {'action': 'none', 'reason': f'groq error {r.status_code}'}
-    except Exception as e:
-        print(f'שגיאה ב-ask_ai: {e}')
-        return {'action': 'none', 'reason': str(e)}
+    for key in GEMINI_KEYS:
+        try:
+            r = requests.post(
+                f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}',
+                json={'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'responseMimeType': 'application/json'}},
+                timeout=20
+            )
+            if r.status_code == 200:
+                text = r.json()['candidates'][0]['content']['parts'][0]['text']
+                return json.loads(text)
+            elif r.status_code == 429:
+                print(f'[Gemini] מפתח {key[-6:]} הגיע למכסה, עובר למפתח הבא...')
+                continue
+            else:
+                print(f'Gemini API שגיאה: {r.status_code} {r.text[:200]}')
+                return {'action': 'none', 'reason': f'gemini error {r.status_code}'}
+        except Exception as e:
+            print(f'שגיאה ב-ask_ai עם מפתח {key[-6:]}: {e}')
+            continue
+
+    print('[Gemini] כל המפתחות הגיעו למכסה!')
+    return {'action': 'none', 'reason': 'כל מפתחות Gemini הגיעו למכסה'}
+
 
 
 def handle_ai_command(token, audio_bytes, state):
