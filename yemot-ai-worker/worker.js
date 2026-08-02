@@ -57,19 +57,23 @@ export default {
       if (!audioRes.ok) return textResponse('id_list_message=t-שגיאה בהורדת ההקלטה');
       const audioBlob = await audioRes.blob();
 
-      // ── 2. WHISPER LARGE V3 TRANSCRIPTION ────────────────────────────────────
+      // ── 2. WHISPER LARGE V3 TURBO (מותאם לאודיו טלפוני 8kHz) ─────────────────
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.wav');
-      formData.append('model', 'whisper-large-v3');
+      formData.append('model', 'whisper-large-v3-turbo');
       formData.append('language', 'he');
-      formData.append('prompt', 'תמלול דיבור בעברית ברורה: הלכה, שולחן ערוך, רמבם, זמני היום, שקיעה, זריחה, מספר רכב, עיקול, שעבוד, דלק, רכבת, פיקוד העורף, חדשות, מזג אוויר, מטבעות, דולר, אירו, אוטובוס, קו, תחנה, שיר, ניגון, תזכורת, טלפון, עסק, 32397, 32427');
+      formData.append('temperature', '0');
+      formData.append('prompt', 'שיחה בעברית. המשתמש שואל שאלות בעברית. מילים נפוצות: מה השעה, מה התאריך, מזג אוויר, חדשות, הלכה, שולחן ערוך, רמבם, שקיעה, זריחה, קריאת שמע, מנחה, ערבית, זמנים, מספר רכב, עיקול, שעבוד, גנוב, תחנת דלק, בנזין, רכבת ישראל, אוטובוס, קו, תחנה, פיקוד העורף, צבע אדום, התרעה, שערי מטבעות, דולר, אירו, חשבון, כפול, אחוז, טלפון, תזכיר לי, 32397, 32427, ביתר עילית, בני ברק, חיפה, ירושלים, תל אביב');
       const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST', headers: { 'Authorization': `Bearer ${GROQ_KEY}` }, body: formData
       });
-      if (!whisperRes.ok) return textResponse('id_list_message=t-שגיאה בתמלול השאלה');
-      const transcribedText = (await whisperRes.json()).text || '';
+      if (!whisperRes.ok) {
+        console.log(`[${new Date().toISOString()}] Whisper error: ${await whisperRes.text()}`);
+        return textResponse('id_list_message=t-שגיאה בתמלול השאלה');
+      }
+      const transcribedText = (await whisperRes.json()).text?.trim() || '';
       console.log(`[${new Date().toISOString()}] Transcribed: "${transcribedText}"`);
-      if (!transcribedText.trim()) return textResponse('id_list_message=t-לא הצלתי לשמוע את השאלה');
+      if (!transcribedText) return textResponse('id_list_message=t-לא הצלחתי לשמוע, אנא דבר ברור יותר');
 
       // ── 3. LOAD CALLER PERSONAL MEMORY FROM KV ───────────────────────────────
       let callerMemory = null;
