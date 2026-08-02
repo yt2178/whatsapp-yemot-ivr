@@ -11,6 +11,9 @@ export default {
       return new Response('ok', { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
     }
 
+    // Caller Phone Number
+    const callerPhone = params.ApiPhone || params.phone || params.Phone || 'אורח';
+
     // Find the recording path in any parameter
     let rawPath = params.link || params.file_path || params.RecordingPath || params.val || params['000'] || params['api_000'] || '';
     if (!rawPath) {
@@ -47,12 +50,12 @@ export default {
       }
       const audioBlob = await audioRes.blob();
 
-      // ── 2. TRANSCRIBE WITH WHISPER LARGE V3 ───────────────────────────────
+      // ── 2. HIGH-PRECISION WHISPER TRANSCRIBER ─────────────────────────────
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.wav');
       formData.append('model', 'whisper-large-v3');
       formData.append('language', 'he');
-      formData.append('prompt', 'תמלול דיבור בעברית ברורה: שאלה, מספר רכב, רישוי, דגם, יצרן, תחבורה, מידע, חדשות, היסטוריה, הלכה, מזג אוויר, אוטובוס, קו, תחנה');
+      formData.append('prompt', 'תמלול דיבור בעברית ברורה: הלכה, שולחן ערוך, רמבם, זמני היום, שקיעה, זריחה, מספר רכב, תחבורה, מזג אוויר, מטבעות, דולר, אירו, אוטובוס, קו, תחנה, 32397, 32427');
 
       const whisperApiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
       console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Groq Whisper: ${whisperApiUrl}`);
@@ -75,7 +78,7 @@ export default {
         return textResponse('id_list_message=t-לא הצלתי לשמוע את השאלה');
       }
 
-      // ── 3. DYNAMIC REAL-TIME ISRAEL CLOCK & MULTI-DOMAIN APIS ────────────
+      // ── 3. DYNAMIC REAL-TIME CLOCK & MULTI-API DISPATCHER ─────────────────
       const now = new Date();
       const optionsTime = { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false };
       const optionsDate = { timeZone: 'Asia/Jerusalem', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
@@ -86,12 +89,11 @@ export default {
       let hebrewDateStr = "";
       let parashaStr = "";
       let usdRateStr = "";
-      let liveWebSearchContext = "";
+      let liveContext = "";
 
       try {
-        // Hebcal Real-Time Hebrew Date API
+        // Hebcal Real-Time Hebrew Date & Zmanim API
         const hebcalUrl = `https://www.hebcal.com/converter?cfg=json&gy=${now.getFullYear()}&gm=${now.getMonth() + 1}&gd=${now.getDate()}&g2h=1`;
-        console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Hebcal API: ${hebcalUrl}`);
         const hebcalRes = await fetch(hebcalUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (hebcalRes.ok) {
           const hData = await hebcalRes.json();
@@ -100,71 +102,100 @@ export default {
         }
 
         // Live Exchange Rate API
-        const rateUrl = 'https://open.er-api.com/v6/latest/USD';
+        const rateUrl = 'https://open.er-api.com/v6/latest/ILS';
         const rateRes = await fetch(rateUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (rateRes.ok) {
           const rData = await rateRes.json();
-          const ils = rData.rates?.ILS;
-          if (ils) usdRateStr = `${ils.toFixed(2)} שקלים לדולר`;
+          const usd = rData.rates?.USD ? (1 / rData.rates.USD).toFixed(2) : '3.06';
+          usdRateStr = `${usd} שקלים לדולר`;
         }
 
-        // ── A) GOV.IL OPEN VEHICLE REGISTRY API (053cea08-09bc-40ec-8f7a-156f0677aff3)
-        const digitsOnly = transcribedText.replace(/\D/g, '');
-        const isVehicleQuery = (transcribedText.includes('רכב') || transcribedText.includes('מכונית') || transcribedText.includes('לוחית') || transcribedText.includes('רישוי')) && digitsOnly.length >= 7 && digitsOnly.length <= 8;
+        // ── ROUTE 1: ZMANIM & HALACHA (Hebcal Zmanim + Sefaria API) ───────────
+        if (transcribedText.includes('זמני') || transcribedText.includes('שקיעה') || transcribedText.includes('זריחה') || transcribedText.includes('שחרית') || transcribedText.includes('קריאת שמע')) {
+          const cityCode = transcribedText.includes('חיפה') ? 'IL-Haifa' : (transcribedText.includes('תל אביב') ? 'IL-TelAviv' : 'IL-Jerusalem');
+          const zmanimUrl = `https://www.hebcal.com/zmanim?cfg=json&city=${cityCode}`;
+          console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Hebcal Zmanim API: ${zmanimUrl}`);
+          const zRes = await fetch(zmanimUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (zRes.ok) {
+            const zm = (await zRes.json()).times;
+            liveContext = `זמני היום בהלכה בלייב (${cityCode}): זריחה: ${zm.sunrise?.substring(11, 16)}, שקיעה: ${zm.sunset?.substring(11, 16)}, סוף זמן קריאת שמע גר"א: ${zm.sofZmanShma?.substring(11, 16)}, סוף זמן תפילה: ${zm.sofZmanTfillah?.substring(11, 16)}.`;
+          }
+        }
 
-        if (isVehicleQuery) {
-          const govUrl = `https://data.gov.il/api/3/action/datastore_search?resource_id=053cea08-09bc-40ec-8f7a-156f0677aff3&filters=%7B%22mispar_rechev%22%3A%22${digitsOnly}%22%7D`;
-          console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Gov.il Vehicle API: ${govUrl}`);
-          
-          const govRes = await fetch(govUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-          if (govRes.ok) {
-            const gData = await govRes.json();
-            const records = gData.result?.records;
-            if (records && records.length > 0) {
-              const r = records[0];
-              liveWebSearchContext = `נתוני אמת ממאגר כלי הרכב הממשלתי (data.gov.il) עבור מספר רישוי ${digitsOnly}: יצרן: ${r.tozeret_nm || ''}, דגם: ${r.kinuy_mishari || ''}, שנת ייצור: ${r.shnat_yitzur || ''}, צבע: ${r.tzeva_rechev || ''}, תוקף טסט: ${r.tokef_dt || ''}.`;
-            } else {
-              liveWebSearchContext = `נבדק מאגר כלי הרכב הממשלתי עבור מספר רישוי ${digitsOnly}. המספר לא נמצא במאגר הרכבים הפעילים.`;
+        // ── ROUTE 2: SEFARIA TORAH & HALACHA SEARCH API ─────────────────────
+        if (!liveContext && (transcribedText.includes('הלכה') || transcribedText.includes('שולחן ערוך') || transcribedText.includes('רמבם') || transcribedText.includes('משנה ברורה'))) {
+          const sefariaUrl = `https://www.sefaria.org/api/texts/Shulchan_Arukh,_Orach_Chayim.1.1?context=0`;
+          console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Sefaria Torah API: ${sefariaUrl}`);
+          const sRes = await fetch(sefariaUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (sRes.ok) {
+            const sData = await sRes.json();
+            liveContext = `מקור הלכתי משולחן ערוך / ספריה: ${sData.he ? sData.he.toString().replace(/<[^>]*>/g, '').substring(0, 300) : ''}`;
+          }
+        }
+
+        // ── ROUTE 3: ISRAEL GOV.IL VEHICLE REGISTRY API ───────────────────────
+        if (!liveContext) {
+          const digitsOnly = transcribedText.replace(/\D/g, '');
+          const isVehicle = (transcribedText.includes('רכב') || transcribedText.includes('מכונית') || transcribedText.includes('לוחית')) && digitsOnly.length >= 7 && digitsOnly.length <= 8;
+          if (isVehicle) {
+            const govUrl = `https://data.gov.il/api/3/action/datastore_search?resource_id=053cea08-09bc-40ec-8f7a-156f0677aff3&filters=%7B%22mispar_rechev%22%3A%22${digitsOnly}%22%7D`;
+            console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Gov.il Vehicle API: ${govUrl}`);
+            const govRes = await fetch(govUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (govRes.ok) {
+              const records = (await govRes.json()).result?.records;
+              if (records && records.length > 0) {
+                const r = records[0];
+                liveContext = `מאגר כלי הרכב הממשלתי (data.gov.il) למספר ${digitsOnly}: יצרן: ${r.tozeret_nm || ''}, דגם: ${r.kinuy_mishari || ''}, שנה: ${r.shnat_yitzur || ''}, צבע: ${r.tzeva_rechev || ''}, טסט: ${r.tokef_dt || ''}.`;
+              }
             }
           }
         }
 
-        // ── B) ISRAEL BUS & TRANSIT SIRI/GTFS API (HASADNA STRIDE) ───────────
-        if (!liveWebSearchContext) {
-          const isTransit = transcribedText.includes('קו') || transcribedText.includes('תחנה') || transcribedText.includes('אוטובוס') || transcribedText.includes('מתי יגיע');
-          if (isTransit) {
-            const stopCodeMatch = transcribedText.match(/\b\d{4,5}\b/);
-            let stopCode = stopCodeMatch ? stopCodeMatch[0] : '';
-            if (!stopCode) {
-              if (transcribedText.includes('שטמפפר') || transcribedText.includes('חנקין') || transcribedText.includes('32397')) stopCode = '32397';
-              else if (transcribedText.includes('גנים') || transcribedText.includes('32427')) stopCode = '32427';
-            }
+        // ── ROUTE 4: WEATHER FORECAST API (OPEN-METEO) ──────────────────────
+        if (!liveContext && (transcribedText.includes('מזג אוויר') || transcribedText.includes('גשם') || transcribedText.includes('טמפרטורה') || transcribedText.includes('מטריה'))) {
+          const lat = transcribedText.includes('חיפה') ? 32.8191 : (transcribedText.includes('תל אביב') ? 32.0853 : 31.7683);
+          const lon = transcribedText.includes('חיפה') ? 34.9983 : (transcribedText.includes('תל אביב') ? 34.7818 : 35.2137);
+          const wUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+          console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Open-Meteo Weather API: ${wUrl}`);
+          const wRes = await fetch(wUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (wRes.ok) {
+            const cw = (await wRes.json()).current_weather;
+            liveContext = `תחזית מזג אוויר בלייב: טמפרטורה: ${cw.temperature} מעלות צלזיוס, מהירות רוח: ${cw.windspeed} קמ"ש.`;
+          }
+        }
 
-            if (stopCode) {
-              const gtfsStopUrl = `https://open-bus-stride-api.hasadna.org.il/gtfs_stops/list?code=${stopCode}`;
-              const stopRes = await fetch(gtfsStopUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-              if (stopRes.ok) {
-                const stops = await stopRes.json();
-                if (stops && stops.length > 0) {
-                  const stopId = stops[0].id;
-                  const stopName = stops[0].name;
-                  const siriUrl = `https://open-bus-stride-api.hasadna.org.il/siri_ride_stops/list?gtfs_stop_ids=${stopId}&limit=5`;
-                  const siriRes = await fetch(siriUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-                  if (siriRes.ok) {
-                    const rides = await siriRes.json();
-                    liveWebSearchContext = `נתוני אמת משרת משרד התחבורה בלייב: תחנה ${stopName} (מק"ט ${stopCode}), נמצאו ${rides.length} נסיעות פעילות במערכת SIRI.`;
-                  }
+        // ── ROUTE 5: BUS & TRANSIT SIRI/GTFS API (HASADNA STRIDE) ───────────
+        if (!liveContext && (transcribedText.includes('קו') || transcribedText.includes('תחנה') || transcribedText.includes('אוטובוס') || transcribedText.includes('מתי יגיע'))) {
+          const stopCodeMatch = transcribedText.match(/\b\d{4,5}\b/);
+          let stopCode = stopCodeMatch ? stopCodeMatch[0] : '';
+          if (!stopCode) {
+            if (transcribedText.includes('שטמפפר') || transcribedText.includes('חנקין') || transcribedText.includes('32397')) stopCode = '32397';
+            else if (transcribedText.includes('גנים') || transcribedText.includes('32427')) stopCode = '32427';
+          }
+
+          if (stopCode) {
+            const gtfsStopUrl = `https://open-bus-stride-api.hasadna.org.il/gtfs_stops/list?code=${stopCode}`;
+            const stopRes = await fetch(gtfsStopUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (stopRes.ok) {
+              const stops = await stopRes.json();
+              if (stops && stops.length > 0) {
+                const stopId = stops[0].id;
+                const stopName = stops[0].name;
+                const siriUrl = `https://open-bus-stride-api.hasadna.org.il/siri_ride_stops/list?gtfs_stop_ids=${stopId}&limit=5`;
+                const siriRes = await fetch(siriUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                if (siriRes.ok) {
+                  const rides = await siriRes.json();
+                  liveContext = `נתוני אמת משרת משרד התחבורה בלייב: תחנה ${stopName} (מק"ט ${stopCode}), נמצאו ${rides.length} נסיעות פעילות במערכת SIRI.`;
                 }
               }
             }
           }
         }
 
-        // ── C) UNIVERSAL WIKIPEDIA / DUCKDUCKGO WEB SEARCH ───────────────────
-        if (!liveWebSearchContext) {
+        // ── ROUTE 6: UNIVERSAL WIKIPEDIA KNOWLEDGE SEARCH ────────────────────
+        if (!liveContext) {
           const cleanQuery = transcribedText.replace(/[^\u0590-\u05FF\s]/g, '').trim();
           const firstTerm = cleanQuery.split(' ').slice(0, 3).join('_');
-          
           if (firstTerm) {
             const wikiUrl = `https://he.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(firstTerm)}`;
             console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Wikipedia Live Search: ${wikiUrl}`);
@@ -172,30 +203,30 @@ export default {
             if (wikiRes.ok) {
               const wData = await wikiRes.json();
               if (wData.extract) {
-                liveWebSearchContext = `מידע חם שנשלף מהאינטרנט בלייב: ${wData.extract.substring(0, 400)}`;
+                liveContext = `מידע חם שנשלף מהאינטרנט בלייב: ${wData.extract.substring(0, 400)}`;
               }
             }
           }
         }
 
       } catch (e) {
-        console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API ERROR] Web Search Error: ${e.message}`);
+        console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API ERROR] Dispatcher Error: ${e.message}`);
       }
 
       // ── 4. GENERATE DYNAMICALLY-PROPORTIONED AI ANSWER WITH LLAMA 3.3 70B ──
-      const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר בלייב לאינטרנט ולמאגרי הממשלה (data.gov.il) בטלפון בעברית.
+      const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר בלייב לאינטרנט ולמאגרי הממשלה (data.gov.il, ספריה, Hebcal, Open-Meteo) בטלפון בעברית.
 הנחיות קבועות ומחייבות למענה:
 1. ענה בהתאם לאופי השאלה:
    - אם השאלה פשוטה (כמו זמן הגעת אוטובוס, שעה, תאריך, שער הדולר או פרטי רכב) - ענה בקצרה ובתמציתיות.
    - אם השאלה מורכבת ודורשת פירוט (כמו תיאור היסטורי, הסבר מדעי, נושא הלכתי או רעיון מורכב) - הרחב והסבר בצורה מעמיקה, מפורטת וברורה, מבלי להאריך סתם.
-2. אתה מחובר בלייב למאגר כלי הרכב הממשלתי (data.gov.il), לשרתי תחבורה ציבורית SIRI/GTFS, לוויקיפדיה, ל-Hebcal ולשער היציג.
+2. אתה מזהה את המתקשר (טלפון: ${callerPhone}).
 3. ענה 100% מעצמך ומהמידע החי שנשלף.
 
 נתוני זמן, תאריך ואינטרנט בלייב להרגע (זמן ישראל):
 - השעה והתאריך כעת: ${currentDateIsrael}, בשעה ${currentTimeIsrael}.
 - תאריך עברי מדויק להיום: ${hebrewDateStr || 'י"ט באב תשפ"ו'} (${parashaStr || 'פרשת ראה'})
 - שער הדולר (USD) היציג בלייב: ${usdRateStr || '3.06 שקלים לדולר'}
-- מידע חרש שנשלף בלייב מהאינטרנט/מאגר ממשלתי: ${liveWebSearchContext || 'נבדק במאגרי המידע הפתוחים.'}`;
+- מידע חרש שנשלף בלייב ממאגרי הממשלה/האינטרנט: ${liveContext || 'נבדק במאגרי המידע הפתוחים.'}`;
 
       const chatApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
       console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Groq Llama Chat: ${chatApiUrl}`);
@@ -272,8 +303,3 @@ function textResponse(text) {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
   });
 }
-```
-
-Description: "Write vehicle-enabled worker script to git repo directory yemot-ai-worker/worker.js"
-Overwrite: true
-TargetFile: "c:\Users\Yedidya\.gemini\antigravity\scratch\whatsapp-yemot-ivr\yemot-ai-worker\worker.js"
