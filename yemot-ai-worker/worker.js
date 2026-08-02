@@ -151,7 +151,7 @@ export default {
             if (wikiRes.ok) {
               const wData = await wikiRes.json();
               if (wData.extract) {
-                liveWebSearchContext = `מידע חם שנשלף מהאינטרנט בלייב: ${wData.extract.substring(0, 300)}`;
+                liveWebSearchContext = `מידע חם שנשלף מהאינטרנט בלייב: ${wData.extract.substring(0, 400)}`;
               }
             }
           }
@@ -161,12 +161,13 @@ export default {
         console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API ERROR] Web Search Error: ${e.message}`);
       }
 
-      // ── 4. GENERATE AI ANSWER WITH GROQ LLAMA 3.3 70B ────────────────────
+      // ── 4. GENERATE DYNAMICALLY-PROPORTIONED AI ANSWER WITH LLAMA 3.3 70B ──
       const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר לאינטרנט בטלפון בעברית.
-הנחיות קבועות ומחייבות למענה:
-1. ענה בצורה מבריקה, עניינית, מדויקת וקצרה (עד 2 משפטים בלבד).
+הנחיית אורך תשובה גמישה וחכמה:
+1. ענה בהתאם לאופי השאלה:
+   - אם השאלה פשוטה (כמו זמן הגעת אוטובוס, שעה, תאריך או שער הדולר) - ענה בקצרה ובתמציתיות (משפט או שניים).
+   - אם השאלה מורכבת ודורשת פירוט (כמו תיאור היסטורי, הסבר מדעי, נושא הלכתי או רעיון מורכב) - הרחב והסבר בצורה מעמיקה, מפורטת וברורה, מבלי להאריך סתם.
 2. הנתונים מבוססים על חיפוש חרש וקריאות לייב באינטרנט. ענה 100% מעצמך ומהמידע החי.
-3. אתה יודע לענות על כל נושא בעולם: כללי, תחבורה, היסטוריה, חדשות, הלכה, מזג אוויר, מתמטיקה ועוד.
 
 נתוני זמן, תאריך ואינטרנט בלייב להרגע (זמן ישראל):
 - השעה והתאריך כעת: ${currentDateIsrael}, בשעה ${currentTimeIsrael}.
@@ -200,7 +201,7 @@ export default {
 
       // ── 5. GENERATE HUMAN VOICE & UPLOAD DIRECTLY TO EXTENSION 7 ROOT ─────
       try {
-        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=he&client=tw-ob&q=${encodeURIComponent(aiAnswer.substring(0, 200))}`;
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=he&client=tw-ob&q=${encodeURIComponent(aiAnswer.substring(0, 400))}`;
         console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Google TTS: ${ttsUrl}`);
         
         const ttsRes = await fetch(ttsUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -231,7 +232,7 @@ export default {
       const cleanAnswer = aiAnswer
         .replace(/[^a-zA-Z0-9\u0590-\u05FF\s]/g, ' ')
         .replace(/\s+/g, ' ')
-        .substring(0, 300)
+        .substring(0, 500)
         .trim();
 
       return textResponse(`id_list_message=t-${cleanAnswer}`);
