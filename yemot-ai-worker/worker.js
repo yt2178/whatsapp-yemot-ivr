@@ -329,20 +329,7 @@ ${memoryNote}
         } catch (_) {}
       }
 
-      // ── 6. GOOGLE TTS → YEMOT UPLOAD ─────────────────────────────────────────
-      try {
-        const ttsRes = await fetch(`https://translate.google.com/translate_tts?ie=UTF-8&tl=he&client=tw-ob&q=${encodeURIComponent(aiAnswer.substring(0, 400))}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (ttsRes.ok && ttsRes.headers.get('Content-Type')?.includes('audio')) {
-          const ttsBlob = await ttsRes.blob();
-          const fileId = `ans${Date.now()}`;
-          const upFormData = new FormData();
-          upFormData.append('file', ttsBlob, `${fileId}.wav`);
-          const upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${YEMOT_TOKEN}&path=ivr2:7/${fileId}.wav&convertAudio=1`, { method: 'POST', body: upFormData });
-          if (upRes.ok) return textResponse(`id_list_message=f-${fileId}.wav`);
-        }
-      } catch (_) {}
-
-      // Fallback text
+      // ── 6. YEMOT NATIVE TTS (קול גברי עברי מובנה) ───────────────────────────
       const cleanAnswer = aiAnswer.replace(/[^a-zA-Z0-9\u0590-\u05FF\s]/g, ' ').replace(/\s+/g, ' ').substring(0, 500).trim();
       return textResponse(`id_list_message=t-${cleanAnswer}`);
 
