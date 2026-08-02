@@ -52,7 +52,7 @@ export default {
       formData.append('file', audioBlob, 'recording.wav');
       formData.append('model', 'whisper-large-v3');
       formData.append('language', 'he');
-      formData.append('prompt', 'תמלול דיבור בעברית ברורה: שאלה, תחבורה, מידע, חדשות, היסטוריה, הלכה, מזג אוויר, אוטובוס, קו, תחנה, 32397, 32427');
+      formData.append('prompt', 'תמלול דיבור בעברית ברורה: שאלה, מספר רכב, רישוי, דגם, יצרן, תחבורה, מידע, חדשות, היסטוריה, הלכה, מזג אוויר, אוטובוס, קו, תחנה');
 
       const whisperApiUrl = 'https://api.groq.com/openai/v1/audio/transcriptions';
       console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Groq Whisper: ${whisperApiUrl}`);
@@ -75,7 +75,7 @@ export default {
         return textResponse('id_list_message=t-לא הצלתי לשמוע את השאלה');
       }
 
-      // ── 3. DYNAMIC REAL-TIME ISRAEL CLOCK & UNIVERSAL INTERNET APIS ────────
+      // ── 3. DYNAMIC REAL-TIME ISRAEL CLOCK & MULTI-DOMAIN APIS ────────────
       const now = new Date();
       const optionsTime = { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false };
       const optionsDate = { timeZone: 'Asia/Jerusalem', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
@@ -108,38 +108,59 @@ export default {
           if (ils) usdRateStr = `${ils.toFixed(2)} שקלים לדולר`;
         }
 
-        // ── UNIVERSAL LIVE INTERNET WEB SEARCH ENGINE ───────────────────────
-        // A) Check if question is Bus / Transit related:
-        const isTransit = transcribedText.includes('קו') || transcribedText.includes('תחנה') || transcribedText.includes('אוטובוס') || transcribedText.includes('מתי יגיע');
-        
-        if (isTransit) {
-          const stopCodeMatch = transcribedText.match(/\b\d{4,5}\b/);
-          let stopCode = stopCodeMatch ? stopCodeMatch[0] : '';
-          if (!stopCode) {
-            if (transcribedText.includes('שטמפפר') || transcribedText.includes('חנקין') || transcribedText.includes('32397')) stopCode = '32397';
-            else if (transcribedText.includes('גנים') || transcribedText.includes('32427')) stopCode = '32427';
-          }
+        // ── A) GOV.IL OPEN VEHICLE REGISTRY API (053cea08-09bc-40ec-8f7a-156f0677aff3)
+        const digitsOnly = transcribedText.replace(/\D/g, '');
+        const isVehicleQuery = (transcribedText.includes('רכב') || transcribedText.includes('מכונית') || transcribedText.includes('לוחית') || transcribedText.includes('רישוי')) && digitsOnly.length >= 7 && digitsOnly.length <= 8;
 
-          if (stopCode) {
-            const gtfsStopUrl = `https://open-bus-stride-api.hasadna.org.il/gtfs_stops/list?code=${stopCode}`;
-            const stopRes = await fetch(gtfsStopUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-            if (stopRes.ok) {
-              const stops = await stopRes.json();
-              if (stops && stops.length > 0) {
-                const stopId = stops[0].id;
-                const stopName = stops[0].name;
-                const siriUrl = `https://open-bus-stride-api.hasadna.org.il/siri_ride_stops/list?gtfs_stop_ids=${stopId}&limit=5`;
-                const siriRes = await fetch(siriUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-                if (siriRes.ok) {
-                  const rides = await siriRes.json();
-                  liveWebSearchContext = `נתוני אמת משרת משרד התחבורה בלייב: תחנה ${stopName} (מק"ט ${stopCode}), נמצאו ${rides.length} נסיעות פעילות במערכת SIRI.`;
+        if (isVehicleQuery) {
+          const govUrl = `https://data.gov.il/api/3/action/datastore_search?resource_id=053cea08-09bc-40ec-8f7a-156f0677aff3&filters=%7B%22mispar_rechev%22%3A%22${digitsOnly}%22%7D`;
+          console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Gov.il Vehicle API: ${govUrl}`);
+          
+          const govRes = await fetch(govUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (govRes.ok) {
+            const gData = await govRes.json();
+            const records = gData.result?.records;
+            if (records && records.length > 0) {
+              const r = records[0];
+              liveWebSearchContext = `נתוני אמת ממאגר כלי הרכב הממשלתי (data.gov.il) עבור מספר רישוי ${digitsOnly}: יצרן: ${r.tozeret_nm || ''}, דגם: ${r.kinuy_mishari || ''}, שנת ייצור: ${r.shnat_yitzur || ''}, צבע: ${r.tzeva_rechev || ''}, תוקף טסט: ${r.tokef_dt || ''}.`;
+            } else {
+              liveWebSearchContext = `נבדק מאגר כלי הרכב הממשלתי עבור מספר רישוי ${digitsOnly}. המספר לא נמצא במאגר הרכבים הפעילים.`;
+            }
+          }
+        }
+
+        // ── B) ISRAEL BUS & TRANSIT SIRI/GTFS API (HASADNA STRIDE) ───────────
+        if (!liveWebSearchContext) {
+          const isTransit = transcribedText.includes('קו') || transcribedText.includes('תחנה') || transcribedText.includes('אוטובוס') || transcribedText.includes('מתי יגיע');
+          if (isTransit) {
+            const stopCodeMatch = transcribedText.match(/\b\d{4,5}\b/);
+            let stopCode = stopCodeMatch ? stopCodeMatch[0] : '';
+            if (!stopCode) {
+              if (transcribedText.includes('שטמפפר') || transcribedText.includes('חנקין') || transcribedText.includes('32397')) stopCode = '32397';
+              else if (transcribedText.includes('גנים') || transcribedText.includes('32427')) stopCode = '32427';
+            }
+
+            if (stopCode) {
+              const gtfsStopUrl = `https://open-bus-stride-api.hasadna.org.il/gtfs_stops/list?code=${stopCode}`;
+              const stopRes = await fetch(gtfsStopUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+              if (stopRes.ok) {
+                const stops = await stopRes.json();
+                if (stops && stops.length > 0) {
+                  const stopId = stops[0].id;
+                  const stopName = stops[0].name;
+                  const siriUrl = `https://open-bus-stride-api.hasadna.org.il/siri_ride_stops/list?gtfs_stop_ids=${stopId}&limit=5`;
+                  const siriRes = await fetch(siriUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+                  if (siriRes.ok) {
+                    const rides = await siriRes.json();
+                    liveWebSearchContext = `נתוני אמת משרת משרד התחבורה בלייב: תחנה ${stopName} (מק"ט ${stopCode}), נמצאו ${rides.length} נסיעות פעילות במערכת SIRI.`;
+                  }
                 }
               }
             }
           }
         }
 
-        // B) General Knowledge Live Internet Search (Wikipedia & DuckDuckGo APIs):
+        // ── C) UNIVERSAL WIKIPEDIA / DUCKDUCKGO WEB SEARCH ───────────────────
         if (!liveWebSearchContext) {
           const cleanQuery = transcribedText.replace(/[^\u0590-\u05FF\s]/g, '').trim();
           const firstTerm = cleanQuery.split(' ').slice(0, 3).join('_');
@@ -162,18 +183,19 @@ export default {
       }
 
       // ── 4. GENERATE DYNAMICALLY-PROPORTIONED AI ANSWER WITH LLAMA 3.3 70B ──
-      const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר לאינטרנט בטלפון בעברית.
-הנחיית אורך תשובה גמישה וחכמה:
+      const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר בלייב לאינטרנט ולמאגרי הממשלה (data.gov.il) בטלפון בעברית.
+הנחיות קבועות ומחייבות למענה:
 1. ענה בהתאם לאופי השאלה:
-   - אם השאלה פשוטה (כמו זמן הגעת אוטובוס, שעה, תאריך או שער הדולר) - ענה בקצרה ובתמציתיות (משפט או שניים).
+   - אם השאלה פשוטה (כמו זמן הגעת אוטובוס, שעה, תאריך, שער הדולר או פרטי רכב) - ענה בקצרה ובתמציתיות.
    - אם השאלה מורכבת ודורשת פירוט (כמו תיאור היסטורי, הסבר מדעי, נושא הלכתי או רעיון מורכב) - הרחב והסבר בצורה מעמיקה, מפורטת וברורה, מבלי להאריך סתם.
-2. הנתונים מבוססים על חיפוש חרש וקריאות לייב באינטרנט. ענה 100% מעצמך ומהמידע החי.
+2. אתה מחובר בלייב למאגר כלי הרכב הממשלתי (data.gov.il), לשרתי תחבורה ציבורית SIRI/GTFS, לוויקיפדיה, ל-Hebcal ולשער היציג.
+3. ענה 100% מעצמך ומהמידע החי שנשלף.
 
 נתוני זמן, תאריך ואינטרנט בלייב להרגע (זמן ישראל):
 - השעה והתאריך כעת: ${currentDateIsrael}, בשעה ${currentTimeIsrael}.
 - תאריך עברי מדויק להיום: ${hebrewDateStr || 'י"ט באב תשפ"ו'} (${parashaStr || 'פרשת ראה'})
 - שער הדולר (USD) היציג בלייב: ${usdRateStr || '3.06 שקלים לדולר'}
-- מידע חרש שנשלף בלייב מהאינטרנט: ${liveWebSearchContext || 'נבדק ברשת האינטרנט.'}`;
+- מידע חרש שנשלף בלייב מהאינטרנט/מאגר ממשלתי: ${liveWebSearchContext || 'נבדק במאגרי המידע הפתוחים.'}`;
 
       const chatApiUrl = 'https://api.groq.com/openai/v1/chat/completions';
       console.log(`[TIMESTAMP: ${new Date().toISOString()}] [API CALLED] Groq Llama Chat: ${chatApiUrl}`);
@@ -250,3 +272,8 @@ function textResponse(text) {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' }
   });
 }
+```
+
+Description: "Write vehicle-enabled worker script to git repo directory yemot-ai-worker/worker.js"
+Overwrite: true
+TargetFile: "c:\Users\Yedidya\.gemini\antigravity\scratch\whatsapp-yemot-ivr\yemot-ai-worker\worker.js"
