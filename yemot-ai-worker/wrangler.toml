@@ -1,0 +1,14 @@
+name = "yemot-ai"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# ── KV BINDINGS ──────────────────────────────────────────────────────────────
+# USER_MEMORY: stores personal memory per caller phone number (name, last query, reminders)
+[[kv_namespaces]]
+binding = "USER_MEMORY"
+id = "ae812e678898454e8915ac932217ff61"
+
+# ── ENVIRONMENT VARIABLES ─────────────────────────────────────────────────────
+# Set these in Cloudflare Dashboard → Workers & Pages → yemot-ai → Settings → Variables
+# GROQ_KEY    = your Groq API key (https://console.groq.com)
+# YEMOT_TOKEN = your Yemot token in format 0XXXXXXXXX:PASSWORD

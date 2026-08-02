@@ -2,7 +2,6 @@ export default {
   async fetch(request, env, ctx) {
     const GROQ_KEY = env.GROQ_KEY || "";
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
-    const AUDD_TOKEN = env.AUDD_TOKEN || "test"; // Set AUDD_TOKEN env var with your real token from dashboard.audd.io
     const url = new URL(request.url);
     const params = Object.fromEntries(url.searchParams.entries());
 
@@ -174,23 +173,6 @@ export default {
           }
         }
 
-        // ── ROUTE 6: SONG/TUNE RECOGNITION (AudD API) ────────────────────────────
-        if (!liveContext && (transcribedText.includes('שיר') || transcribedText.includes('ניגון') || transcribedText.includes('מה השיר') || transcribedText.includes('מה המנגינה'))) {
-          const auddFormData = new FormData();
-          auddFormData.append('file', audioBlob, 'recording.wav');
-          auddFormData.append('api_token', env.AUDD_TOKEN || AUDD_TOKEN);
-          auddFormData.append('return', 'apple_music,deezer');
-          const auddRes = await fetch('https://api.audd.io/', { method: 'POST', body: auddFormData });
-          if (auddRes.ok) {
-            const auddData = await auddRes.json();
-            if (auddData.result) {
-              const { artist, title, album, release_date } = auddData.result;
-              liveContext = `זיהוי שיר/ניגון (AudD): שם: "${title}", מבצע: ${artist}, אלבום: ${album || 'לא ידוע'}, שנה: ${release_date?.substring(0, 4) || 'לא ידוע'}.`;
-            } else {
-              liveContext = 'זיהוי שיר: לא הצלחתי לזהות את הניגון. נסה לזמזם חלק ברור יותר.';
-            }
-          }
-        }
 
         // ── ROUTE 7: VEHICLE REGISTRY + LIENS (data.gov.il) ────────────────────
         if (!liveContext) {
