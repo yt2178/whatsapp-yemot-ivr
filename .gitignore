@@ -1,0 +1,6 @@
+
+# Wrangler local state
+.wrangler/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
