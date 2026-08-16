@@ -1,0 +1,26 @@
+# Render Blueprint — auto-deploy WAHA on Render free tier
+# 1. Create account on render.com (no credit card needed)
+# 2. New → Blueprint → connect this repo
+# 3. Render reads this file and deploys automatically
+
+services:
+  - type: web
+    name: waha-whatsapp
+    runtime: docker
+    dockerfilePath: ./waha/Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: WAHA_KEY
+        value: waha-secret-key-2026
+      - key: WHATSAPP_DEFAULT_ENGINE
+        value: NOWEB
+      - key: WHATSAPP_DEFAULT_AUTHENTICATION_TYPE
+        value: POSTGRESQL
+      - key: WHATSAPP_SESSIONS_POSTGRESQL_URL
+        sync: false  # Set manually in Render dashboard (from Supabase)
+      - key: WHATSAPP_HOOK_EVENTS
+        value: message
+      - key: WHATSAPP_HOOK_URL
+        sync: false  # Optional: set to your webhook receiver

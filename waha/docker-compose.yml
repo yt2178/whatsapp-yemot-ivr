@@ -10,11 +10,13 @@ services:
     environment:
       - WAHA_KEY=${WAHA_API_KEY:-waha-secret-key-2026}
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
-      - WHATSAPP_DEFAULT_AUTHENTICATION_TYPE=LOCAL
-      - WHATSAPP_HOOK_URL=${WEBHOOK_URL:-}
+      - WHATSAPP_DEFAULT_AUTHENTICATION_TYPE=POSTGRESQL
+      # הכנס את ה-URL מ-Supabase (לדוגמה: postgres://postgres:password@db.xxx.supabase.co:5432/postgres)
+      - WHATSAPP_SESSIONS_POSTGRESQL_URL=${POSTGRES_URL:-}
       - WHATSAPP_HOOK_EVENTS=message
+      - WHATSAPP_HOOK_URL=${WEBHOOK_URL:-}
     volumes:
-      - waha_sessions:/app/.sessions
+      - waha_media:/app/.media
 
 volumes:
-  waha_sessions:
+  waha_media:
