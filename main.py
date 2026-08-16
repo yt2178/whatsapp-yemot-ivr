@@ -1,4 +1,5 @@
 import requests
+from waha_compat import use_waha, send_message as wa_send_message, send_file_by_upload as wa_send_file, receive_notification as wa_recv, delete_notification as wa_del, get_last_messages as wa_history, get_contact_info as wa_contact, download_media as wa_download
 import os
 import json
 import time
@@ -52,7 +53,7 @@ def get_contact_name(phone_raw, fallback_name=''):
     try:
         p = phone_raw.split('@')[0]
         chat_id = phone_raw if '@' in phone_raw else p + '@c.us'
-        url = f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/getContactInfo/{GREEN_API_TOKEN}'
+        url = f'{WAHA_URL}/api/getContactInfo' if use_waha() else f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/getContactInfo/{GREEN_API_TOKEN}'
         r = requests.post(url, json={'chatId': chat_id}, timeout=8)
         if r.status_code == 200:
             d = r.json()
@@ -667,13 +668,17 @@ def handle_ai_command(token, audio_bytes, state):
                 print(f'חריגה ב-Meta API: {e}')
         
         # 2. ניסיון גיבוי ב-Green API
-        if not sent_ok and GREEN_API_INSTANCE_ID and GREEN_API_TOKEN:
+        if not sent_ok:
             try:
-                sr = requests.post(
-                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
-                    json={'chatId': chat_id, 'message': outbound_msg}, timeout=30
-                )
-                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                if use_waha():
+                    r = wa_send_message(chat_id, outbound_msg)
+                    sent_ok = bool(r.get('idMessage'))
+                elif GREEN_API_INSTANCE_ID and GREEN_API_TOKEN:
+                    sr = requests.post(
+                        f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                        json={'chatId': chat_id, 'message': outbound_msg}, timeout=30
+                    )
+                    sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
             except Exception as e:
                 print(f'שגיאת Green API בשליחת AI: {e}')
         
@@ -750,22 +755,31 @@ def send_recording_to_whatsapp(token, file_path, chat_id, recipient_label, mode,
         if mode == '2':
             text = transcribe_hebrew(dl.content)
             if text:
-                sr = requests.post(
-                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
-                    json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{text}'}, timeout=30
-                )
-                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                msg_text = f'🎙️ הודעה מתומללת מהקו:\n{text}'
+                if use_waha():
+                    r = wa_send_message(chat_id, msg_text)
+                    sent_ok = bool(r.get('idMessage'))
+                else:
+                    sr = requests.post(
+                        f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                        json={'chatId': chat_id, 'message': msg_text}, timeout=30
+                    )
+                    sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
                 if not sent_ok:
                     mode = '1'  # נופלים לקול אם תמלול נכשל
 
         if mode == '1':
             fname = file_path.split('/')[-1]
-            sr = requests.post(
-                f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
-                data={'chatId': chat_id, 'caption': f'📞 הודעה קולית לך מהקו'},
-                files={'file': (fname, dl.content, 'audio/wav')}, timeout=30
-            )
-            sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+            if use_waha():
+                r = wa_send_file(chat_id, dl.content, fname, '📞 הודעה קולית לך מהקו', 'audio/wav')
+                sent_ok = bool(r.get('idMessage'))
+            else:
+                sr = requests.post(
+                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendFileByUpload/{GREEN_API_TOKEN}',
+                    data={'chatId': chat_id, 'caption': f'📞 הודעה קולית לך מהקו'},
+                    files={'file': (fname, dl.content, 'audio/wav')}, timeout=30
+                )
+                sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
 
         if sent_ok:
             print(f'✅ הקלטה נשלחה ל-{recipient_label} ({chat_id})')
@@ -961,10 +975,16 @@ def check_and_send_recordings(token, sent_recordings, state=None):
             chat_id = normalize_phone(digits_only) + '@c.us'
             print(f'[נתיב A טקסט] שולח טקסט ל-{chat_id}: "{transcribed}"')
             try:
-                sr = requests.post(
-                    f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
-                    json={'chatId': chat_id, 'message': f'🎙️ הודעה מתומללת מהקו:\n{transcribed}'}, timeout=30)
-                if sr.status_code == 200 and sr.json().get('idMessage'):
+                msg_text = f'🎙️ הודעה מתומללת מהקו:\n{transcribed}'
+                if use_waha():
+                    r = wa_send_message(chat_id, msg_text)
+                    sent_ok = bool(r.get('idMessage'))
+                else:
+                    sr = requests.post(
+                        f'https://api.green-api.com/waInstance{GREEN_API_INSTANCE_ID}/sendMessage/{GREEN_API_TOKEN}',
+                        json={'chatId': chat_id, 'message': msg_text}, timeout=30)
+                    sent_ok = sr.status_code == 200 and sr.json().get('idMessage')
+                if sent_ok:
                     print(f'✅ נשלח!')
                     sent_recordings.add(uid)
                     # ניקוי: מחיקת text file, phone file, TTS אישור, send file

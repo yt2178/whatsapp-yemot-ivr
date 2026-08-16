@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - WAHA_KEY=${WAHA_API_KEY:-waha-secret-key-2026}
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WHATSAPP_DEFAULT_AUTHENTICATION_TYPE=LOCAL
+      - WHATSAPP_HOOK_URL=${WEBHOOK_URL:-}
+      - WHATSAPP_HOOK_EVENTS=message
+    volumes:
+      - waha_sessions:/app/.sessions
+
+volumes:
+  waha_sessions:

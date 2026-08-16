@@ -1,0 +1,19 @@
+service: waha-whatsapp
+name: waha-whatsapp
+source:
+  image: devlikeapro/waha:latest
+  ports:
+    - port: 3000
+      protocol: http
+  env_vars:
+    - key: WAHA_KEY
+      value: waha-secret-key-2026
+    - key: WHATSAPP_DEFAULT_ENGINE
+      value: NOWEB
+    - key: WHATSAPP_DEFAULT_AUTHENTICATION_TYPE
+      value: LOCAL
+    - key: WHATSAPP_HOOK_EVENTS
+      value: message
+  health_check:
+    path: /health
+    port: 3000
