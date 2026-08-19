@@ -4,6 +4,7 @@ export default {
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
     const url = new URL(request.url);
     const params = Object.fromEntries(url.searchParams.entries());
+    console.log(`[${new Date().toISOString()}] Request: ${request.url}`);
 
     // ── HANGUP HANDLER ────────────────────────────────────────────────────────
     if (params.hangup === 'yes') {
@@ -56,6 +57,7 @@ export default {
       const audioRes = await fetch(downloadUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
       if (!audioRes.ok) return textResponse('id_list_message=t-שגיאה בהורדת ההקלטה');
       const audioBlob = await audioRes.blob();
+      console.log(`[${new Date().toISOString()}] Audio: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
 
       // ── 2. WHISPER LARGE V3 TURBO (מותאם לאודיו טלפוני 8kHz) ─────────────────
       const formData = new FormData();
