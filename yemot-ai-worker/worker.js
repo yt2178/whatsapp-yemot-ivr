@@ -310,16 +310,33 @@ ${memoryNote}
 שערי מטבעות בלייב: ${usdRateStr}
 מידע בלייב ממאגרים: ${liveContext || 'נבדק, אין מידע ספציפי.'}`;
 
-      const chatRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${GROQ_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'groq/compound', temperature: 0.0, max_tokens: 150,
-          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: transcribedText }]
-        })
-      });
-      if (!chatRes.ok) return textResponse('id_list_message=t-שגיאה בקבלת תשובת AI');
-      const aiAnswer = (await chatRes.json()).choices[0].message.content;
+      // Try multiple models with retry logic
+      const models = ['groq/compound', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
+      let chatRes = null;
+      let aiAnswer = '';
+      for (const mdl of models) {
+        try {
+          chatRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${GROQ_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: mdl, temperature: 0.0, max_tokens: 150,
+              messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: transcribedText }]
+            })
+          });
+          if (chatRes.ok) {
+            aiAnswer = (await chatRes.json()).choices[0].message.content || '';
+            if (aiAnswer.trim()) {
+              console.log(`[${new Date().toISOString()}] AI (${mdl}): "${aiAnswer}"`);
+              break;
+            }
+          }
+          console.log(`[${new Date().toISOString()}] Model ${mdl} failed: ${chatRes.status}`);
+        } catch (e) {
+          console.log(`[${new Date().toISOString()}] Model ${mdl} error: ${e.message}`);
+        }
+      }
+      if (!aiAnswer.trim()) return textResponse('id_list_message=t-שגיאה בקבלת תשובת AI, נסה שוב');
       console.log(`[${new Date().toISOString()}] AI Answer: "${aiAnswer}"`);
 
       // ── UPDATE KV: save last query for this caller ───────────────────────────
