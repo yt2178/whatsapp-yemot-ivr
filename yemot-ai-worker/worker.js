@@ -300,7 +300,7 @@ export default {
 
       // ── 5. GROQ LLAMA 3.3 70B ANSWER GENERATION ──────────────────────────────
       const memoryNote = callerName ? `המתקשר הוא ${callerName} (טלפון: ${callerPhone}).` : `מספר טלפון מתקשר: ${callerPhone || 'לא ידוע'}.`;
-      const systemPrompt = `אתה עוזר קולי אינטליגנטי, מבריק, ידען ומחובר בלייב ל-14 מאגרי מידע וממשלה בישראל ובעולם בטלפון בעברית.
+      const systemPrompt = `אתה עוזר קולי בעברית בטלפון. עונה קצר, ברור ותמציתי. תשובה מקסימלית 3 משפטים. אל תאריך.
 הנחיות אורך תשובה גמישה:
 - שאלה פשוטה (שעה, אוטובוס, רכב, מטבע, חישוב, שיר) → ענה קצר ותמציתי.
 - שאלה מורכבת (הלכה, היסטוריה, מדע, רעיון) → הרחב, פרט והסבר מעמיק ומפורט.
@@ -314,7 +314,7 @@ ${memoryNote}
         method: 'POST',
         headers: { 'Authorization': `Bearer ${GROQ_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'groq/compound-mini', temperature: 0.0,
+          model: 'groq/compound', temperature: 0.0, max_tokens: 150,
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: transcribedText }]
         })
       });
