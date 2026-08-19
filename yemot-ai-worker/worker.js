@@ -5,6 +5,23 @@ export default {
     const url = new URL(request.url);
     const params = Object.fromEntries(url.searchParams.entries());
     console.log(`[${new Date().toISOString()}] Request: ${request.url}`);
+    
+    // Log request to KV for debugging
+    if (env.USER_MEMORY) {
+      try {
+        const logEntry = JSON.stringify({ts: new Date().toISOString(), url: request.url, method: request.method, params: params});
+        await env.USER_MEMORY.put('last_request', logEntry, { expirationTtl: 3600 });
+      } catch (_) {}
+    }
+
+    // ── DEBUG: Read last request from KV
+    if (params.debug === 'last') {
+      if (env.USER_MEMORY) {
+        const lastReq = await env.USER_MEMORY.get('last_request');
+        return new Response(lastReq || 'no request logged yet', { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+      }
+      return new Response('KV not available', { status: 200 });
+    }
 
     // ── HANGUP HANDLER ────────────────────────────────────────────────────────
     if (params.hangup === 'yes') {
