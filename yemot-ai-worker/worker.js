@@ -300,7 +300,7 @@ export default {
         console.log(`[${new Date().toISOString()}] API Error: ${e.message}`);
       }
 
-      // ── 5. GROQ LLAMA 3.3 70B ANSWER GENERATION ──────────────────────────────
+      // ── 5. GROQ COMPOUND ANSWER GENERATION ──────────────────────────────
       const memoryNote = callerName ? `המתקשר הוא ${callerName} (טלפון: ${callerPhone}).` : `מספר טלפון מתקשר: ${callerPhone || 'לא ידוע'}.`;
       const systemPrompt = `אתה עוזר קולי בעברית בטלפון. עונה קצר, ברור ותמציתי. תשובה מקסימלית 3 משפטים. אל תאריך.
 הנחיות אורך תשובה גמישה:
@@ -313,7 +313,7 @@ ${memoryNote}
 מידע בלייב ממאגרים: ${liveContext || 'נבדק, אין מידע ספציפי.'}`;
 
       // Try multiple models with retry logic
-      const models = ['groq/compound', 'openai/gpt-oss-20b', 'qwen/qwen3.6-27b'];
+      const models = ['groq/compound-mini', 'groq/compound'];
       let chatRes = null;
       let aiAnswer = '';
       for (const mdl of models) {
