@@ -366,7 +366,12 @@ var worker_default = {
   }
 };
 function textResponse(text) {
-  return new Response(text, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  let t = String(text || "");
+  const emptyBody = t.match(/^id_list_message=t-([\s\S]*)$/);
+  if (emptyBody && !emptyBody[1].trim()) {
+    t = "id_list_message=t-\u05D0\u05D9\u05DF \u05DE\u05E2\u05E0\u05D4 \u05DB\u05E8\u05D2\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2";
+  }
+  return new Response(t, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }
 __name(textResponse, "textResponse");
 __name2(textResponse, "textResponse");
