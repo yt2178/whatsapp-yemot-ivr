@@ -15,3 +15,13 @@ id = "ae812e678898454e8915ac932217ff61"
 
 [vars]
 MAILBOX_OWNER_PHONE = "0537876782"
+
+# ── DURABLE OBJECT: instant consistent interactive state ─────────────────────
+[durable_objects]
+bindings = [
+  { name = "CONT_STATE", class_name = "ContState" }
+]
+
+[[migrations]]
+tag = "v1_cont_state"
+new_sqlite_classes = ["ContState"]

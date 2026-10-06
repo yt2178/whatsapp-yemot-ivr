@@ -540,8 +540,26 @@ async function callBridge(env, payload) {
 __name(callBridge, "callBridge");
 __name2(callBridge, "callBridge");
 __name22(callBridge, "callBridge");
+async function doStateFetch(env, key, method, body) {
+  try {
+    if (!env.CONT_STATE) return null;
+    const stub = env.CONT_STATE.get(env.CONT_STATE.idFromName(key));
+    const res = await stub.fetch("https://do/" + encodeURIComponent(key), { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return await res.json().catch(() => null);
+  } catch (_) {
+    return null;
+  }
+}
+__name(doStateFetch, "doStateFetch");
+__name2(doStateFetch, "doStateFetch");
+__name22(doStateFetch, "doStateFetch");
 async function kvGetList(env, key) {
   try {
+    if (/^(?:cont_|pend_|lt_|convo_)/.test(key) && env.CONT_STATE) {
+      const r = await doStateFetch(env, key, "GET");
+      if (r && r.value !== undefined && r.value !== null) return r.value;
+      if (r && r.value === null) return null;
+    }
     const v = await env.USER_MEMORY.get(key);
     return v ? JSON.parse(v) : null;
   } catch (_) {
@@ -553,6 +571,9 @@ __name2(kvGetList, "kvGetList");
 __name22(kvGetList, "kvGetList");
 async function kvSetList(env, key, val) {
   try {
+    if (/^(?:cont_|pend_|lt_|convo_)/.test(key) && env.CONT_STATE) {
+      await doStateFetch(env, key, "PUT", val);
+    }
     await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: 600 });
   } catch (_) {
   }
@@ -620,6 +641,7 @@ __name2(setContState, "setContState");
 __name22(setContState, "setContState");
 async function clearContState(env, callerPhone) {
   try {
+    await doStateFetch(env, contStateKey(callerPhone), "DELETE");
     await env.USER_MEMORY.delete(contStateKey(callerPhone));
   } catch (_) {
   }
@@ -1070,6 +1092,7 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
     const raw = await env.USER_MEMORY.get(pendKey);
     if (!raw) return speak("אין פעולה ממתינה לאישור, הגדר אותה מחדש");
     const pend = JSON.parse(raw);
+    await doStateFetch(env, pendKey, "DELETE");
     await env.USER_MEMORY.delete(pendKey);
     if (String(confirmValue) !== "1") {
       logEvent("action_cancelled", { caller: callerTail(callerPhone) });
@@ -1343,7 +1366,36 @@ function speak(text) {
 __name(speak, "speak");
 __name2(speak, "speak");
 __name22(speak, "speak");
-export {
-  worker_default as default
+
+var ContState = class {
+  constructor(state, env) {
+    this.state = state;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    const key = decodeURIComponent(url.pathname.slice(1));
+    if (request.method === "GET") {
+      const v = await this.state.storage.get(key);
+      return Response.json({ value: v === undefined ? null : v });
+    }
+    if (request.method === "PUT") {
+      const body = await request.json().catch(() => null);
+      await this.state.storage.put(key, body);
+      return Response.json({ ok: true });
+    }
+    if (request.method === "DELETE") {
+      await this.state.storage.delete(key);
+      return Response.json({ ok: true });
+    }
+    return Response.json({ ok: false, error: "bad_method" }, { status: 405 });
+  }
 };
+__name(ContState, "ContState");
+__name2(ContState, "ContState");
+__name22(ContState, "ContState");
+export {
+  worker_default as default,
+  ContState
+};
+
 //# sourceMappingURL=worker.js.map
