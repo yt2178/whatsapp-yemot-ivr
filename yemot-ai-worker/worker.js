@@ -795,7 +795,7 @@ __name22(routeCommunication, "routeCommunication");
 async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const safe = String(promptText || "").replace(/[=\r\n]+/g, " ").slice(0, 300);
   await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
-  return textResponse(`read=t-${safe}=confirm,no,1,1,15,Digits`);
+  return textResponse(`read=t-${safe}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
 __name2(pendingConfirmRead, "pendingConfirmRead");
