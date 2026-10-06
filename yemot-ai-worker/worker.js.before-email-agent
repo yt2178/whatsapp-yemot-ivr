@@ -1,0 +1,249 @@
+export default {
+  async fetch(request, env, ctx) {
+    const GROQ_KEY = env.GROQ_KEY || "";
+    const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
+    const url = new URL(request.url);
+    const params = Object.fromEntries(url.searchParams.entries());
+    console.log(`[${new Date().toISOString()}] Request: ${request.url}`);
+    
+    // Log request to KV for debugging
+    if (env.USER_MEMORY) {
+      try {
+        const logEntry = JSON.stringify({ts: new Date().toISOString(), url: request.url, method: request.method, params: params});
+        await env.USER_MEMORY.put('last_request', logEntry, { expirationTtl: 3600 });
+      } catch (_) {}
+    }
+
+    // ── DEBUG: Read last request from KV
+    if (params.debug === 'last') {
+      if (env.USER_MEMORY) {
+        const lastReq = await env.USER_MEMORY.get('last_request');
+        return new Response(lastReq || 'no request logged yet', { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
+      }
+      return new Response('KV not available', { status: 200 });
+    }
+
+    // ── HANGUP HANDLER ────────────────────────────────────────────────────────
+    if (params.hangup === 'yes') {
+      return new Response('ok', { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+    }
+
+    // ── CALLER IDENTIFICATION ─────────────────────────────────────────────────
+    const callerPhone = params.ApiPhone || params.phone || params.Phone || '';
+
+    // ── FIRE PENDING REMINDER FOR THIS CALLER (if any stored in KV) ──────────
+    if (callerPhone && env.USER_MEMORY) {
+      try {
+        const reminderKey = `reminder_${callerPhone}`;
+        const reminderRaw = await env.USER_MEMORY.get(reminderKey);
+        if (reminderRaw) {
+          const reminder = JSON.parse(reminderRaw);
+          const now = new Date();
+          const reminderTime = new Date(reminder.fireAt);
+          if (now >= reminderTime) {
+            await env.USER_MEMORY.delete(reminderKey);
+            const msg = encodeURIComponent(reminder.message || 'שלום! זוהי תזכורת שביקשת');
+            await fetch(`https://www.call2all.co.il/ym/api/SendTTS?token=${YEMOT_TOKEN}&phones=${callerPhone}&message=${msg}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          }
+        }
+      } catch (_) {}
+    }
+
+    // ── FIND RECORDING PATH ───────────────────────────────────────────────────
+    let rawPath = params.link || params.file_path || params.RecordingPath || params.val || params['000'] || params['api_000'] || '';
+    if (!rawPath) {
+      for (const [k, v] of Object.entries(params)) {
+        if (typeof v === 'string' && (v.includes('.wav') || v.includes('.opus'))) { rawPath = v; break; }
+      }
+    }
+
+    if (!rawPath || !rawPath.trim()) {
+      return textResponse('id_list_message=t-אנא אמור את השאלה בקול רם');
+    }
+
+    try {
+      let p = rawPath.trim();
+      while (p.startsWith('ivr2:') || p.startsWith('/')) {
+        if (p.startsWith('ivr2:')) p = p.substring(5);
+        if (p.startsWith('/')) p = p.substring(1);
+      }
+
+      // ── 1. DOWNLOAD RECORDING FROM YEMOT ────────────────────────────────────
+      const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${p}`;
+      console.log(`[${new Date().toISOString()}] Yemot Download: ${downloadUrl}`);
+      const audioRes = await fetch(downloadUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!audioRes.ok) return textResponse('id_list_message=t-שגיאה בהורדת ההקלטה');
+      const audioBlob = await audioRes.blob();
+      console.log(`[${new Date().toISOString()}] Audio: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+
+      // ── 2. WHISPER LARGE V3 TURBO (מותאם לאודיו טלפוני 8kHz) ─────────────────
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.wav');
+      formData.append('model', 'whisper-large-v3-turbo');
+      formData.append('language', 'he');
+      formData.append('temperature', '0');
+      formData.append('prompt', 'שיחה בעברית. המשתמש שואל שאלות בעברית. מילים נפוצות: מה השעה, מה התאריך, מזג אוויר, חדשות, הלכה, שולחן ערוך, רמבם, שקיעה, זריחה, קריאת שמע, מנחה, ערבית, זמנים, מספר רכב, עיקול, שעבוד, גנוב, תחנת דלק, בנזין, רכבת ישראל, אוטובוס, קו, תחנה, פיקוד העורף, צבע אדום, התרעה, שערי מטבעות, דולר, אירו, חשבון, כפול, אחוז, טלפון, תזכיר לי, 32397, 32427, ביתר עילית, בני ברק, חיפה, ירושלים, תל אביב');
+      const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${GROQ_KEY}` }, body: formData
+      });
+      if (!whisperRes.ok) {
+        console.log(`[${new Date().toISOString()}] Whisper error: ${await whisperRes.text()}`);
+        return textResponse('id_list_message=t-שגיאה בתמלול השאלה');
+      }
+      const transcribedText = (await whisperRes.json()).text?.trim() || '';
+      console.log(`[${new Date().toISOString()}] Transcribed: "${transcribedText}"`);
+      if (!transcribedText) return textResponse('id_list_message=t-לא הצלחתי לשמוע, אנא דבר ברור יותר');
+
+      // ── 3. LOAD CALLER PERSONAL MEMORY FROM KV ───────────────────────────────
+      let callerMemory = null;
+      let callerName = '';
+      if (callerPhone && env.USER_MEMORY) {
+        try {
+          const stored = await env.USER_MEMORY.get(`mem_${callerPhone}`);
+          if (stored) {
+            callerMemory = JSON.parse(stored);
+            callerName = callerMemory.name || '';
+          }
+        } catch (_) {}
+      }
+
+      // ── 4. LIVE TIME & DATE (Israel) ─────────────────────────────────────────
+      const now = new Date();
+      const currentTimeIsrael = now.toLocaleTimeString('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hour12: false });
+      const currentDateIsrael = now.toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+      let hebrewDateStr = '', parashaStr = '', usdRateStr = '', liveContext = '';
+
+      try {
+        // Hebrew Date
+        const hebcalRes = await fetch(`https://www.hebcal.com/converter?cfg=json&gy=${now.getFullYear()}&gm=${now.getMonth()+1}&gd=${now.getDate()}&g2h=1`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (hebcalRes.ok) {
+          const hd = await hebcalRes.json();
+          hebrewDateStr = hd.hebrew || '';
+          if (hd.events?.length) parashaStr = hd.events.join(', ');
+        }
+
+        // Exchange Rates
+        const rateRes = await fetch('https://open.er-api.com/v6/latest/ILS', { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (rateRes.ok) {
+          const rd = await rateRes.json();
+          const usd = rd.rates?.USD ? (1/rd.rates.USD).toFixed(2) : '3.06';
+          const eur = rd.rates?.EUR ? (1/rd.rates.EUR).toFixed(2) : '3.32';
+          const gbp = rd.rates?.GBP ? (1/rd.rates.GBP).toFixed(2) : '3.85';
+          const cad = rd.rates?.CAD ? (1/rd.rates.CAD).toFixed(2) : '2.24';
+          usdRateStr = `דולר: ${usd} ₪, אירו: ${eur} ₪, ליש"ט: ${gbp} ₪, דולר קנדי: ${cad} ₪`;
+        }
+
+        // ── ROUTE 1: REMINDER SAVE
+        const isReminder = transcribedText.includes('תזכיר') || transcribedText.includes('תזכר') || transcribedText.includes('תזכירי');
+        if (isReminder && callerPhone && env.USER_MEMORY) {
+          const hourMatch = transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
+          const hour = hourMatch ? parseInt(hourMatch[1]) : 8;
+          const minute = hourMatch?.[2] ? parseInt(hourMatch[2]) : 0;
+          const isTomorrow = transcribedText.includes('מחר');
+          const fireDate = new Date();
+          if (isTomorrow) fireDate.setDate(fireDate.getDate() + 1);
+          fireDate.setHours(hour, minute, 0, 0);
+          const message = transcribedText.replace(/תזכיר(י)? לי (מחר )?(ב-?\d{1,2}(:\d{2})?)?/g, '').trim() || 'תזכורת ממערכת ה-AI';
+          await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
+          liveContext = `נשמרה תזכורת קולית אישית עבור המתקשר ${callerPhone} בשעה ${hour}:${minute < 10 ? '0'+minute : minute}${isTomorrow ? ' מחר' : ' היום'}: "${message}"`;
+        }
+
+        // ── ROUTE 2: UPDATE CALLER MEMORY
+        const nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
+        if (nameMatch && callerPhone && env.USER_MEMORY) {
+          const newName = nameMatch[1];
+          const mem = callerMemory || {};
+          mem.name = newName;
+          mem.phone = callerPhone;
+          mem.lastSeen = now.toISOString();
+          await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592000 });
+          liveContext = `שמרתי את שמך במערכת: ${newName}. בפעם הבאה שתתקשר, אדע שאתה ${newName}!`;
+        }
+
+        // ── ROUTE 3: ZMANIM
+        if (!liveContext && (transcribedText.includes('זמני') || transcribedText.includes('שקיעה') || transcribedText.includes('זריחה') || transcribedText.includes('שחרית') || transcribedText.includes('קריאת שמע') || transcribedText.includes('מנחה') || transcribedText.includes('ערבית'))) {
+          const cityCode = transcribedText.includes('חיפה') ? 'IL-Haifa' : transcribedText.includes('תל אביב') ? 'IL-TelAviv' : transcribedText.includes('ביתר') ? 'IL-BeitarIllit' : transcribedText.includes('בני ברק') ? 'IL-BneiBrak' : transcribedText.includes('אשדוד') ? 'IL-Ashdod' : transcribedText.includes('באר שבע') ? 'IL-Beersheba' : 'IL-Jerusalem';
+          const zRes = await fetch(`https://www.hebcal.com/zmanim?cfg=json&city=${cityCode}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (zRes.ok) {
+            const zm = (await zRes.json()).times;
+            liveContext = `זמני היום בהלכה: עלות השחר ${zm.alotHaShachar?.substring(11,16)}, זריחה ${zm.sunrise?.substring(11,16)}, סוף קריאת שמע ${zm.sofZmanShma?.substring(11,16)}, חצות היום ${zm.chatzot?.substring(11,16)}, מנחה גדולה ${zm.minchaGedola?.substring(11,16)}, שקיעה ${zm.sunset?.substring(11,16)}`;
+          }
+        }
+
+      } catch (_) {}
+
+      // ── 5. GROQ AI (groq/compound-mini) ──────────────────────────────────────
+      const systemPrompt = `אתה עוזר קולי בעברית בטלפון. עונה קצר, ברור ותמציתי. תשובה מקסימלית 3 משפטים. אל תאריך. אל תסביר מה אתה עושה, רק ענה ישירות. אם שואלים מי אתה, ענה: אני העוזר החכם שלך. ענה תמיד בעברית פשוטה וברורה. אל תשתמש באנגלית.
+השעה עכשיו ${currentTimeIsrael}, התאריך ${currentDateIsrael}${hebrewDateStr ? ', ' + hebrewDateStr : ''}${parashaStr ? ', ' + parashaStr : ''}${usdRateStr ? '. שערי חליפין: ' + usdRateStr : ''}${callerName ? '. המתקשר נקרא ' + callerName : ''}${liveContext ? '. מידע נוסף: ' + liveContext : ''}`;
+
+      const models = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+      let chatRes = null;
+      let aiAnswer = '';
+      for (const mdl of models) {
+        try {
+          chatRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${GROQ_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: mdl, temperature: 0.0, max_tokens: 300, reasoning_effort: 'low',
+              messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: transcribedText }]
+            })
+          });
+          if (chatRes.ok) {
+            aiAnswer = (await chatRes.json()).choices[0].message.content || '';
+            if (aiAnswer.trim()) {
+              console.log(`[${new Date().toISOString()}] AI (${mdl}): "${aiAnswer}"`);
+              break;
+            }
+          }
+          console.log(`[${new Date().toISOString()}] Model ${mdl} failed: ${chatRes.status}`);
+        } catch (e) {
+          console.log(`[${new Date().toISOString()}] Model ${mdl} error: ${e.message}`);
+        }
+      }
+      if (!aiAnswer.trim()) return textResponse('id_list_message=t-שגיאה בקבלת תשובת AI, נסה שוב');
+      console.log(`[${new Date().toISOString()}] AI Answer: "${aiAnswer}"`);
+
+      // ── UPDATE KV: save last query for this caller ───────────────────────────
+      if (callerPhone && env.USER_MEMORY) {
+        try {
+          const mem = callerMemory || {};
+          mem.phone = callerPhone;
+          mem.lastQuery = transcribedText;
+          mem.lastSeen = now.toISOString();
+          await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592000 });
+        } catch (_) {}
+      }
+
+      // ── 6. CLEAN FOR YEMOT TTS (שומר פיסוק בסיסי!) ───────────────────────────
+      // שומר: אותיות עבריות, מספרים, רווחים, פסיקים, נקודות, סימני שאלה, סימני קריאה, מקפים, נקודתיים
+      // מסיר: שורות חדשות, markdown, HTML, תווים מיוחדים, אמוג'י
+      const cleanAnswer = aiAnswer
+        .replace(/<\/?think>/gi, '')
+        .replace(/[\r\n]+/g, ' ')
+        // Yemot uses a dot to separate playback commands and a hyphen to separate type/value.
+        // They must never appear inside a t- text payload.
+        .replace(/[.\u2024\u2026]+/g, ', ')
+        .replace(/[-\u2010-\u2015]+/g, ' ')
+        // Also remove HTTP/API separators and any unsupported control characters.
+        .replace(/[&=#%+]/g, ' ')
+        .replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!;:]/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/,+/g, ',')
+        .substring(0, 450)
+        .trim()
+        .replace(/^[,;:!?\s]+|[,;:\s]+$/g, '');
+      if (!cleanAnswer) return textResponse('id_list_message=t-לא התקבלה תשובה תקינה, נסו שוב');
+      return textResponse(`id_list_message=t-${cleanAnswer}`);
+
+    } catch (err) {
+      console.log(`[${new Date().toISOString()}] SYSTEM ERROR: ${err.message}`);
+      return textResponse('id_list_message=t-שגיאה במערכת');
+    }
+  }
+};
+
+function textResponse(text) {
+  return new Response(text, { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+}

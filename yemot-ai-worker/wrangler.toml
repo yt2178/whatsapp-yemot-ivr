@@ -12,3 +12,6 @@ id = "ae812e678898454e8915ac932217ff61"
 # Set these in Cloudflare Dashboard → Workers & Pages → yemot-ai → Settings → Variables
 # GROQ_KEY    = your Groq API key (https://console.groq.com)
 # YEMOT_TOKEN = your Yemot token in format 0XXXXXXXXX:PASSWORD
+
+[vars]
+MAILBOX_OWNER_PHONE = "0537876782"
