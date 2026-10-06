@@ -6,6 +6,54 @@ var __defProp2 = Object.defineProperty;
 var __name2 = /* @__PURE__ */ __name((target, value) => __defProp2(target, "name", { value, configurable: true }), "__name");
 var __defProp22 = Object.defineProperty;
 var __name22 = /* @__PURE__ */ __name2((target, value) => __defProp22(target, "name", { value, configurable: true }), "__name");
+function hebNumWords(n) {
+  const units = ["", "\u05D0\u05D7\u05EA", "\u05E9\u05EA\u05D9\u05D9\u05DD", "\u05E9\u05DC\u05D5\u05E9", "\u05D0\u05E8\u05D1\u05E2", "\u05D7\u05DE\u05E9", "\u05E9\u05E9", "\u05E9\u05D1\u05E2", "\u05E9\u05DE\u05D5\u05E0\u05D4", "\u05EA\u05E9\u05E2"];
+  const teens = ["\u05E2\u05E9\u05E8", "\u05D0\u05D7\u05EA \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05EA\u05D9\u05DD \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05DC\u05D5\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05D0\u05E8\u05D1\u05E2 \u05E2\u05E9\u05E8\u05D4", "\u05D7\u05DE\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05D1\u05E2 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05DE\u05D5\u05E0\u05D4 \u05E2\u05E9\u05E8\u05D4", "\u05EA\u05E9\u05E2 \u05E2\u05E9\u05E8\u05D4"];
+  const tens = ["", "\u05E2\u05E9\u05E8", "\u05E2\u05E9\u05E8\u05D9\u05D9\u05DD", "\u05E9\u05DC\u05D5\u05E9\u05D9\u05DD", "\u05D0\u05E8\u05D1\u05E2\u05D9\u05DD", "\u05D7\u05DE\u05D9\u05E9\u05D9\u05DD"];
+  n = Number(n) || 0;
+  if (n < 10) return units[n];
+  if (n < 20) return teens[n - 10];
+  const t2 = Math.floor(n / 10), u2 = n % 10;
+  return tens[t2] + (u2 ? " \u05D5" + units[u2] : "");
+}
+__name(hebNumWords, "hebNumWords");
+__name2(hebNumWords, "hebNumWords");
+__name22(hebNumWords, "hebNumWords");
+function gematria(n) {
+  const tensL = ["", "\u05D9", "\u05DB", "\u05DC", "\u05DE", "\u05E0", "\u05E1", "\u05E2", "\u05E4", "\u05E6"];
+  const unitsL = ["", "\u05D0", "\u05D1", "\u05D2", "\u05D3", "\u05D4", "\u05D5", "\u05D6", "\u05D7", "\u05D8"];
+  if (n === 15) return "\u05D8\u05D5";
+  if (n === 16) return "\u05D8\u05D6";
+  return tensL[Math.floor(n / 10)] + unitsL[n % 10];
+}
+__name(gematria, "gematria");
+__name2(gematria, "gematria");
+__name22(gematria, "gematria");
+function localClockText(timeStr, dateStr, hebStr) {
+  let out = "";
+  const m2 = /^(\d{1,2}):(\d{2})$/.exec(String(timeStr || ""));
+  if (m2) {
+    const hh = Number(m2[1]), mm = Number(m2[2]);
+    out = "\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 " + hebNumWords(hh) + (mm === 0 ? " \u05D1\u05D3\u05D9\u05D5\u05E7" : ", " + hebNumWords(mm));
+  }
+  if (dateStr) out += (out ? ", " : "") + "\u05D4\u05EA\u05D0\u05E8\u05D9\u05DA " + dateStr;
+  const monMap = { "Tishrei": "\u05EA\u05E9\u05E8\u05D9", "Cheshvan": "\u05D7\u05E9\u05D5\u05DF", "Kislev": "\u05DB\u05E1\u05DC\u05D5", "Tevet": "\u05D8\u05D1\u05EA", "Shevat": "\u05E9\u05D1\u05D8", "Adar": "\u05D0\u05D3\u05E8", "Adar I": "\u05D0\u05D3\u05E8 \u05D0", "Adar II": "\u05D0\u05D3\u05E8 \u05D1", "Nisan": "\u05E0\u05D9\u05E1\u05DF", "Iyyar": "\u05D0\u05D9\u05D9\u05E8", "Sivan": "\u05E1\u05D9\u05D5\u05D5\u05DF", "Tamuz": "\u05EA\u05DE\u05D5\u05D6", "Av": "\u05D0\u05D1", "Elul": "\u05D0\u05DC\u05D5\u05DC" };
+  const parts = String(hebStr || "").trim().split(/\s+/);
+  if (parts.length >= 3 && /[^0-9]/.test(parts[0])) {
+    out += ", " + String(hebStr || "").replace(/[\u0591-\u05C7]/g, "");
+  } else if (parts.length >= 3) {
+    const yr = parseInt(parts[parts.length - 1], 10);
+    const mon = monMap[parts.slice(1, -1).join(" ")] || "";
+    const day = parseInt(parts[0], 10);
+    if (mon && yr >= 5700 && yr < 5800) {
+      out += ", " + gematria(day) + " \u05D1" + mon + " \u05EA\u05E9" + gematria(yr - 5700);
+    }
+  }
+  return out;
+}
+__name(localClockText, "localClockText");
+__name2(localClockText, "localClockText");
+__name22(localClockText, "localClockText");
 function needsWebSearch(text) {
   const q = String(text || "").toLowerCase();
   const clock = /(?:מה השעה|מה התאריך|איזה תאריך|תאריך עברי|איזה יום היום)/.test(q);
@@ -197,6 +245,23 @@ var worker_default = {
       }
       if (convo && Date.now() - (convo.ts || 0) > 300000) convo = null;
       const isShortReply = transcribedText.split(/\s+/).filter(Boolean).length <= 4;
+      const clockFast = /(?:\u05DE\u05D4 \u05D4\u05E9\u05E2\u05D4|\u05DE\u05D4 \u05E9\u05E2\u05D4|\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5|\u05DE\u05D4 \u05D4\u05EA\u05D0\u05E8\u05D9\u05DA|\u05DE\u05D4 \u05EA\u05D0\u05E8\u05D9\u05DA|\u05D0\u05D9\u05D6\u05D4 \u05EA\u05D0\u05E8\u05D9\u05DA|\u05D4\u05EA\u05D0\u05E8\u05D9\u05DA \u05D4\u05D9\u05D5\u05DD|\u05EA\u05D0\u05E8\u05D9\u05DA \u05E2\u05D1\u05E8\u05D9|\u05D0\u05D9\u05D6\u05D4 \u05D9\u05D5\u05DD \u05D4\u05D9\u05D5\u05DD|\u05D0\u05D9\u05D6\u05D4 \u05D9\u05D5\u05DD)/.test(transcribedText) && !/(?:\u05DE\u05D9\u05D9\u05DC|\u05D0\u05D9\u05DE\u05D9\u05D9\u05DC|\u05E6\u05D0\u05D8|\u05E9\u05DC\u05D7|\u05EA\u05E9\u05DC\u05D7|\u05E9\u05DC\u05D5\u05D7|\u05EA\u05E2\u05D1\u05D9\u05E8|\u05D3\u05D5\u05DC\u05E8|\u05D0\u05D9\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5|\u05DE\u05D6\u05D2|\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF|\u05E7\u05E8\u05D9\u05E4\u05D8\u05D5|\u05D1\u05D9\u05E7\u05D5\u05D3)/.test(transcribedText);
+      if (clockFast) {
+        const _now = /* @__PURE__ */ new Date();
+        const _t = _now.toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", hour12: false });
+        const _d = _now.toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem", weekday: "long", year: "numeric", month: "long", day: "numeric" });
+        let _hb = "";
+        try {
+          const _r = await fetch(`https://www.hebcal.com/converter?cfg=json&gy=${_now.getFullYear()}&gm=${_now.getMonth() + 1}&gd=${_now.getDate()}&g2h=1`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (_r.ok) {
+            const _hd = await _r.json();
+            if (_hd.heDateParts) _hb = _hd.heDateParts.d + " \u05D1" + _hd.heDateParts.m + " " + _hd.heDateParts.y;
+            else _hb = _hd.hebrew || "";
+          }
+        } catch (_) {
+        }
+        return speak(localClockText(_t, _d, _hb));
+      }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
       const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)|(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])(?:ב)?(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
       const emailIntent = /(?:מייל|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
