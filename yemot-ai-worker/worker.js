@@ -793,9 +793,13 @@ __name(routeCommunication, "routeCommunication");
 __name2(routeCommunication, "routeCommunication");
 __name22(routeCommunication, "routeCommunication");
 async function pendingConfirmRead(env, callerPhone, pend, promptText) {
-  const safe = String(promptText || "").replace(/[=\r\n]+/g, " ").slice(0, 300);
+  const full = String(promptText || "");
+  const marker = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA";
+  const cut = full.indexOf(marker);
+  const head = (cut > 0 ? full.slice(0, cut) : full).replace(/[?.,;:!\s]+$/g, "").replace(/[=\r\n]+/g, " ").slice(0, 300);
+  const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
   await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
-  return textResponse(`read=t-${safe}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
+  return textResponse(`id_list_message=t-${head}.&read=t-${question}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
 __name2(pendingConfirmRead, "pendingConfirmRead");
