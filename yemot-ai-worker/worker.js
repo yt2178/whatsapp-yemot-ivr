@@ -257,7 +257,8 @@ var worker_default = {
       let convo = null;
       if (env.USER_MEMORY) {
         try {
-          const cRaw = await env.USER_MEMORY.get("convo_" + callId);
+          const cDo = await doStateFetch(env, "convo_" + callId, "GET");
+        const cRaw = (cDo && cDo.value !== undefined && cDo.value !== null) ? JSON.stringify(cDo.value) : await env.USER_MEMORY.get("convo_" + callId);
           if (cRaw) convo = JSON.parse(cRaw);
         } catch (_) {
         }
@@ -632,6 +633,7 @@ __name22(contStateKey, "contStateKey");
 async function setContState(env, callerPhone, cont) {
   if (!env.USER_MEMORY) return;
   try {
+    await doStateFetch(env, contStateKey(callerPhone), "PUT", cont);
     await env.USER_MEMORY.put(contStateKey(callerPhone), JSON.stringify(cont), { expirationTtl: 600 });
   } catch (_) {
   }
@@ -658,6 +660,7 @@ __name22(lastTargetKey, "lastTargetKey");
 async function setLastTarget(env, callerPhone, name, address, kind) {
   if (!env.USER_MEMORY || !address) return;
   try {
+    await doStateFetch(env, lastTargetKey(callerPhone), "PUT", { name: String(name || ""), address, kind: String(kind || ""), ts: Date.now() });
     await env.USER_MEMORY.put(lastTargetKey(callerPhone), JSON.stringify({ name: String(name || ""), address, kind: String(kind || ""), ts: Date.now() }), { expirationTtl: 3600 });
   } catch (_) {
   }
@@ -953,6 +956,7 @@ async function saveConvoTurn(env, userText, answerText) {
     let prev = {};
     try { prev = JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
     const turns = [...(prev.turns || []), { u: String(userText || "").slice(0, 200), a: String(answerText || "").slice(0, 300) }].slice(-6);
+    await doStateFetch(env, key, "PUT", { turns, lastUser: String(userText || "").slice(0, 200), lastAns: String(answerText || "").slice(0, 300), ts: Date.now() });
     await env.USER_MEMORY.put(key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
   } catch (_) {}
 }
@@ -1080,7 +1084,8 @@ async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const cut = full.indexOf(marker);
   const head = (cut > 0 ? full.slice(0, cut) : full).replace(/[?.,;:!\s]+$/g, "").replace(/[=\r\n]+/g, " ").slice(0, 300);
   const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
-  await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
+  await doStateFetch(env, "pend_" + normalizeIsraelPhone(callerPhone), "PUT", pend);
+await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
   return textResponse(`id_list_message=t-${head}.&read=t-${question}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
@@ -1089,9 +1094,11 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
   try {
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("אין הרשאה לביצוע הפעולה ממספר זה");
     const pendKey = "pend_" + normalizeIsraelPhone(callerPhone);
-    const raw = await env.USER_MEMORY.get(pendKey);
+    const rawDo = await doStateFetch(env, pendKey, "GET");
+    const raw = (rawDo && rawDo.value !== undefined && rawDo.value !== null) ? JSON.stringify(rawDo.value) : await env.USER_MEMORY.get(pendKey);
     if (!raw) return speak("אין פעולה ממתינה לאישור, הגדר אותה מחדש");
     const pend = JSON.parse(raw);
+    await doStateFetch(env, pendKey, "DELETE");
     await doStateFetch(env, pendKey, "DELETE");
     await env.USER_MEMORY.delete(pendKey);
     if (String(confirmValue) !== "1") {
