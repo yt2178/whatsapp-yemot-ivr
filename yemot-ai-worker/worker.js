@@ -284,7 +284,7 @@ var worker_default = {
       }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
       const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)|(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])(?:ב)?(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
-      const emailIntent = /(?:מי?יל|מיל|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
+      const emailIntent = /(?:מי?יל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
       const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
       if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2, \u05D0\u05E0\u05D0 \u05D3\u05D1\u05E8 \u05D1\u05E8\u05D5\u05E8 \u05D9\u05D5\u05EA\u05E8");
