@@ -451,7 +451,7 @@ var worker_default = {
           logEvent("web_search_error", { type: e?.name || "Error" });
         }
       } else {
-        const models = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+        const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
         for (const mdl of models) {
           try {
             chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -1002,7 +1002,7 @@ __name(contactChoiceNames, "contactChoiceNames");
 __name2(contactChoiceNames, "contactChoiceNames");
 __name22(contactChoiceNames, "contactChoiceNames");
 async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
-  const models = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
+  const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
   for (const mdl of models) {
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -1106,7 +1106,7 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
     }
     logEvent("action_confirmed", { kind: String(pend.kind || "?").slice(0, 12), caller: callerTail(callerPhone) });
     if (pend.kind === "email") {
-      const data = await callBridge(env, { action: "send", to: pend.to, subject: pend.subject || "", body: pend.body || "", inReplyTo: pend.inReplyTo, threadId: pend.threadId, requestId: "confirm" });
+      const data = await callBridge(env, { action: "send", to: pend.to, subject: pend.subject || "", body: pend.body || "הודעה מהקו הטלפוני", inReplyTo: pend.inReplyTo, threadId: pend.threadId, requestId: "confirm" });
       logEvent("email_send", { ok: Boolean(data.ok), confirmed: true });
       if (!data.ok) return speak("שליחת המייל נכשלה, נסה שוב");
       await setLastTarget(env, callerPhone, pend.name || "", pend.to, "email");
