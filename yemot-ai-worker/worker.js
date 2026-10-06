@@ -675,7 +675,7 @@ __name(isPronounRef, "isPronounRef");
 __name2(isPronounRef, "isPronounRef");
 __name22(isPronounRef, "isPronounRef");
 function findCurrency(text) {
-  const t = String(text || "");
+  const t = String(text || "").replace(/[.,!?;:\u05C4]/g, " ");
   if (/(?:^|\s)(?:\u05D3\u05D5\u05DC\u05E8\S*|\u05D3\u05D5\u05DC\u05D0\u05E8\S*)(?:$|\s|,)|usd|dollar/i.test(t)) return "usd";
   if (/(?:^|\s)(?:\u05D0\u05D9?\u05E8\u05D5|\u05D0\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5)(?:$|\s|,)|euro|eur/i.test(t)) return "eur";
   if (/(?:^|\s)(?:\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF\S*|\u05D1\u05D9\u05E7\u05D5\u05D9\u05DF\S*|\u05D1\u05D9\u05E7\u05D5\u05D3)(?:$|\s|,)|bitcoin|btc/i.test(t)) return "btc";
