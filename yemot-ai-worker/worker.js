@@ -862,7 +862,7 @@ function buildWhisperPrompt(contacts) {
 __name(buildWhisperPrompt, "buildWhisperPrompt");
 __name2(buildWhisperPrompt, "buildWhisperPrompt");
 __name22(buildWhisperPrompt, "buildWhisperPrompt");
-) {
+function findContactMatches(contacts, requestedName) {
   const variants = nameVariants(requestedName);
   for (const wanted of variants) {
     if (wanted.length < 2) continue;
