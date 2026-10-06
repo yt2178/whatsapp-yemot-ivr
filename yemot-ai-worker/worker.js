@@ -407,8 +407,14 @@ var worker_default = {
     }
   }
 };
+function stripNiqqud(str) {
+  return String(str || "").replace(/[\u0591-\u05C7\u200B-\u200F\uFEFF]/g, "").replace(/[\u05F3\u05F4]/g, "");
+}
+__name(stripNiqqud, "stripNiqqud");
+__name2(stripNiqqud, "stripNiqqud");
+__name22(stripNiqqud, "stripNiqqud");
 function textResponse(text) {
-  let t = String(text || "");
+  let t = stripNiqqud(String(text || ""));
   const emptyBody = t.match(/^id_list_message=t-([\s\S]*)$/);
   if (emptyBody && !emptyBody[1].trim()) {
     t = "id_list_message=t-\u05D0\u05D9\u05DF \u05DE\u05E2\u05E0\u05D4 \u05DB\u05E8\u05D2\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2";
