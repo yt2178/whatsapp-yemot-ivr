@@ -588,7 +588,7 @@ function contactStorageKey(callerPhone) {
 __name(contactStorageKey, "contactStorageKey");
 __name2(contactStorageKey, "contactStorageKey");
 __name22(contactStorageKey, "contactStorageKey");function normalizeContactTerm(value) {
-  return String(value || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  return String(value || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "").replace(/[\u05DD\u05DF\u05E5\u05E3\u05DA]/g, (ch) => ({ "\u05DD": "\u05DE", "\u05DF": "\u05E0", "\u05E5": "\u05E6", "\u05E3": "\u05E4", "\u05DA": "\u05DB" })[ch]);
 }
 __name(normalizeContactTerm, "normalizeContactTerm");
 __name2(normalizeContactTerm, "normalizeContactTerm");
@@ -618,6 +618,12 @@ function nameVariants(text) {
   const prefixes = ["\u05D0\u05DC", "\u05DC\u05D9", "\u05DC", "\u05D4", "\u05D1", "\u05D5", "\u05DE", "\u05DB"];
   for (const p of prefixes) {
     if (n0.startsWith(p) && n0.length > p.length) out.push(n0.slice(p.length));
+  }
+  if (/[a-z]/.test(n0) && n0.length >= 3) {
+    const LATIN_TO_HEB = { b: "ב", c: "כ", d: "ד", f: "פ", g: "ג", h: "ה", j: "ג", k: "ק", l: "ל", m: "מ", n: "נ", p: "פ", q: "ק", r: "ר", s: "ס", t: "ת", v: "ב", w: "ו", x: "ס", z: "ז" };
+    let sk = "";
+    for (const ch of n0) if (LATIN_TO_HEB[ch]) sk += LATIN_TO_HEB[ch];
+    if (sk.length >= 3) out.push(sk);
   }
   return [...new Set(out.filter((v) => v && v.length > 0))];
 }
