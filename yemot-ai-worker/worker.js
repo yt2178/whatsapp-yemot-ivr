@@ -1,9 +1,11 @@
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
-// work/active-worker.mjs
+// worker.js
 var __defProp2 = Object.defineProperty;
 var __name2 = /* @__PURE__ */ __name((target, value) => __defProp2(target, "name", { value, configurable: true }), "__name");
+var __defProp22 = Object.defineProperty;
+var __name22 = /* @__PURE__ */ __name2((target, value) => __defProp22(target, "name", { value, configurable: true }), "__name");
 function needsWebSearch(text) {
   const q = String(text || "").toLowerCase();
   const clock = /(?:מה השעה|מה התאריך|איזה תאריך|תאריך עברי|איזה יום היום)/.test(q);
@@ -14,16 +16,19 @@ function needsWebSearch(text) {
   return explicit || /(?:היום|עכשיו|כרגע|עדכני|עדכנית|חדשות|מחיר|שער|דולר|אירו|מזג|תוצאה|לוח זמנים|טיסה|רכבת|אוטובוס)/.test(q);
 }
 __name(needsWebSearch, "needsWebSearch");
+__name2(needsWebSearch, "needsWebSearch");
 function responsesOutputText(payload) {
   if (typeof payload?.output_text === "string" && payload.output_text.trim()) return payload.output_text.trim();
   const output = Array.isArray(payload?.output) ? payload.output : [];
   return output.flatMap((item) => Array.isArray(item?.content) ? item.content : []).filter((part) => part?.type === "output_text" || part?.type === "text").map((part) => String(part.text || "")).join(" ").trim();
 }
 __name(responsesOutputText, "responsesOutputText");
+__name2(responsesOutputText, "responsesOutputText");
 function responsesUsedBrowserSearch(payload) {
   return (Array.isArray(payload?.output) ? payload.output : []).some((item) => /(?:browser|web)_search/i.test(String(item?.type || "")));
 }
 __name(responsesUsedBrowserSearch, "responsesUsedBrowserSearch");
+__name2(responsesUsedBrowserSearch, "responsesUsedBrowserSearch");
 async function currentDollarRate() {
   try {
     const liveResponse = await fetch("https://open.er-api.com/v6/latest/USD", { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -44,11 +49,13 @@ async function currentDollarRate() {
   return { rate, lastUpdate: String(data?.lastUpdate || ""), source: "bank_of_israel" };
 }
 __name(currentDollarRate, "currentDollarRate");
+__name2(currentDollarRate, "currentDollarRate");
 function asksDollarRate(text) {
   const q = String(text || "");
-  return /(?:שער|מחיר|כמה).{0,20}דולר|דולר.{0,20}(?:שער|מחיר|כמה)/.test(q);
+  return /(?:שי?ער|מחיר|כמה).{0,20}דולר|דולר.{0,20}(?:שי?ער|מחיר|כמה)/.test(q);
 }
 __name(asksDollarRate, "asksDollarRate");
+__name2(asksDollarRate, "asksDollarRate");
 function speakTimeNumber(n) {
   const units = ["\u05D0\u05E4\u05E1", "\u05D0\u05D7\u05EA", "\u05E9\u05EA\u05D9\u05D9\u05DD", "\u05E9\u05DC\u05D5\u05E9", "\u05D0\u05E8\u05D1\u05E2", "\u05D7\u05DE\u05E9", "\u05E9\u05E9", "\u05E9\u05D1\u05E2", "\u05E9\u05DE\u05D5\u05E0\u05D4", "\u05EA\u05E9\u05E2"];
   const teens = ["\u05E2\u05E9\u05E8", "\u05D0\u05D7\u05EA \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05EA\u05D9\u05DD \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05DC\u05D5\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05D0\u05E8\u05D1\u05E2 \u05E2\u05E9\u05E8\u05D4", "\u05D7\u05DE\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05E9 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05D1\u05E2 \u05E2\u05E9\u05E8\u05D4", "\u05E9\u05DE\u05D5\u05E0\u05D4 \u05E2\u05E9\u05E8\u05D4", "\u05EA\u05E9\u05E2 \u05E2\u05E9\u05E8\u05D4"];
@@ -60,10 +67,12 @@ function speakTimeNumber(n) {
   return tens[base] ? `${tens[base]} \u05D5${units[n - base]}` : String(n);
 }
 __name(speakTimeNumber, "speakTimeNumber");
+__name2(speakTimeNumber, "speakTimeNumber");
 function makePhoneFriendlyTimes(answer) {
   return String(answer || "").replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hour, minute) => `${speakTimeNumber(Number(hour))}, ${speakTimeNumber(Number(minute))}`);
 }
 __name(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
+__name2(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 var worker_default = {
   async fetch(request, env, ctx) {
     const GROQ_KEY = env.GROQ_KEY || "";
@@ -81,8 +90,8 @@ var worker_default = {
     }
     const callerPhone = params.ApiPhone || params.phone || params.Phone || "";
     const mailboxAuth = url.pathname.startsWith("/ivr/") ? url.pathname.slice(5) : "";
-    if (params.confirm !== undefined && callerPhone) {
-      if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לביצוע הפעולה ממספר זה");
+    if (params.confirm !== void 0 && callerPhone) {
+      if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
       return await handleConfirm(env, params.confirm, callerPhone);
     }
     logEvent("request_received", { hasRecording: Boolean(params.link || params.file_path || params.RecordingPath || params.val || params["000"] || params["api_000"]), caller: callerTail(callerPhone) });
@@ -127,7 +136,7 @@ var worker_default = {
       const audioRes = await fetch(downloadUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
       if (!audioRes.ok) {
         logEvent("recording_download_failed", { status: audioRes.status });
-        return textResponse("id_list_message=t-לא הצלחתי לקבל את ההקלטה, נסה שוב");
+        return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E7\u05D1\u05DC \u05D0\u05EA \u05D4\u05D4\u05E7\u05DC\u05D8\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
       }
       const audioBlob = await audioRes.blob();
       logEvent("recording_downloaded", { bytes: audioBlob.size });
@@ -136,12 +145,15 @@ var worker_default = {
         const adv = new DataView(buf);
         let off = 12, silentAudio = false;
         while (off + 8 <= adv.byteLength) {
-          const chunkId = String.fromCharCode(adv.getUint8(off), adv.getUint8(off+1), adv.getUint8(off+2), adv.getUint8(off+3));
-          const chunkSize = adv.getUint32(off+4, true);
+          const chunkId = String.fromCharCode(adv.getUint8(off), adv.getUint8(off + 1), adv.getUint8(off + 2), adv.getUint8(off + 3));
+          const chunkSize = adv.getUint32(off + 4, true);
           if (chunkId === "data") {
             let sum = 0, n = 0;
             const dend = Math.min(off + 8 + chunkSize, adv.byteLength);
-            for (let p = off + 8; p + 1 < dend; p += 2) { sum += Math.abs(adv.getInt16(p, true)); n++; }
+            for (let p2 = off + 8; p2 + 1 < dend; p2 += 2) {
+              sum += Math.abs(adv.getInt16(p2, true));
+              n++;
+            }
             if (n > 800 && sum / n < 60) silentAudio = true;
             break;
           }
@@ -155,7 +167,7 @@ var worker_default = {
       formData.append("model", "whisper-large-v3-turbo");
       formData.append("language", "he");
       formData.append("temperature", "0");
-      formData.append("prompt", "שיחה בעברית בקו טלפון. מונחים: תזכיר, שעה, תאריך, דולר, שטרודל, נקודה, מייל, צאט.");
+      formData.append("prompt", "\u05E9\u05D9\u05D7\u05D4 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05DF. \u05DE\u05D5\u05E0\u05D7\u05D9\u05DD: \u05EA\u05D6\u05DB\u05D9\u05E8, \u05E9\u05E2\u05D4, \u05EA\u05D0\u05E8\u05D9\u05DA, \u05D3\u05D5\u05DC\u05E8, \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC, \u05E0\u05E7\u05D5\u05D3\u05D4, \u05DE\u05D9\u05D9\u05DC, \u05E6\u05D0\u05D8.");
       formData.append("response_format", "verbose_json");
       const whisperRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
         method: "POST",
@@ -169,33 +181,46 @@ var worker_default = {
         } catch (_) {
         }
         logEvent("transcription_failed", { status: whisperRes.status, code: errorCode });
-        return textResponse("id_list_message=t-לא הצלחתי לשמוע את השאלה, אמור אותה שוב בבקשה");
+        return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
       }
       const transcribedText = (await whisperRes.json()).text?.trim() || "";
-      if (!transcribedText) return textResponse("id_list_message=t-לא שמעתי אותך, אמור את בקשתך בקול רם");
-      const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)|(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])(?:ב)?(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(transcribedText);
-      const emailIntent = /(?:מייל|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(transcribedText);
-      const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(transcribedText);
+      if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
+      const callId = String(params.ApiCallId || requestId || "call_" + callerPhone).slice(0, 90);
+      globalThis.__callId = callId;
+      let convo = null;
+      if (env.USER_MEMORY) {
+        try {
+          const cRaw = await env.USER_MEMORY.get("convo_" + callId);
+          if (cRaw) convo = JSON.parse(cRaw);
+        } catch (_) {
+        }
+      }
+      if (convo && Date.now() - (convo.ts || 0) > 300000) convo = null;
+      const isShortReply = transcribedText.split(/\s+/).filter(Boolean).length <= 4;
+      const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
+      const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)|(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])(?:ב)?(?:צ[׳'״"]?אט|צ[׳'״"]?ט|צאט|צ׳ט|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
+      const emailIntent = /(?:מייל|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
+      const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
       if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2, \u05D0\u05E0\u05D0 \u05D3\u05D1\u05E8 \u05D1\u05E8\u05D5\u05E8 \u05D9\u05D5\u05EA\u05E8");
       const pendingChat = await getPendingChat(env, callerPhone);
       const savedContacts = callerPhone ? await getContacts(env, callerPhone) : [];
-      const normalizedTranscript = normalizeContactTerm(transcribedText);
+      const normalizedTranscript = normalizeContactTerm(effectiveText);
       const mentionsSavedContact = savedContacts.some((contact) => [contact.name, ...contact.aliases || []].some((alias) => {
         const normalizedAlias = normalizeContactTerm(alias);
         return normalizedAlias.length >= 2 && normalizedTranscript.includes(normalizedAlias);
       }));
       if (emailIntent) {
-        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לגישה למייל ולצאט ממספר זה");
-        return await handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId);
+        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
+        return await handleEmail(env, GROQ_KEY, effectiveText, callerPhone, requestId);
       }
       if (chatIntent || sendIntent && mentionsSavedContact || pendingChat && transcribedText.length <= 80) {
-        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לגישה למייל ולצאט ממספר זה");
-        return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, pendingChat, requestId);
+        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
+        return await handleGoogleChat(env, GROQ_KEY, effectiveText, callerPhone, pendingChat, requestId);
       }
       if (sendIntent) {
-        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לגישה למייל ולצאט ממספר זה");
-        return await routeCommunication(env, GROQ_KEY, transcribedText, callerPhone, requestId);
+        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
+        return await routeCommunication(env, GROQ_KEY, effectiveText, callerPhone, requestId);
       }
       let callerMemory = null;
       let callerName = "";
@@ -227,7 +252,7 @@ var worker_default = {
           if (wres.ok) {
             const wd = await wres.json();
             const wc = wd.current || {};
-            if (wc.temperature_2m !== undefined) weatherStr = `מזג האוויר בתל אביב: ${wc.temperature_2m} מעלות`;
+            if (wc.temperature_2m !== void 0) weatherStr = `\u05DE\u05D6\u05D2 \u05D4\u05D0\u05D5\u05D5\u05D9\u05E8 \u05D1\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1: ${wc.temperature_2m} \u05DE\u05E2\u05DC\u05D5\u05EA`;
           }
         } catch (_) {
         }
@@ -242,7 +267,7 @@ var worker_default = {
             const bres = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", { headers: { "User-Agent": "Mozilla/5.0" } });
             if (bres.ok) btcUsd = (await bres.json()).bitcoin?.usd || null;
           }
-          if (btcUsd && !isNaN(btcUsd)) btcStr = `מחיר ביטקוין כרגע: ${Math.round(btcUsd).toLocaleString("en-US")} דולר`;
+          if (btcUsd && !isNaN(btcUsd)) btcStr = `\u05DE\u05D7\u05D9\u05E8 \u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF \u05DB\u05E8\u05D2\u05E2: ${Math.round(btcUsd).toLocaleString("en-US")} \u05D3\u05D5\u05DC\u05E8`;
         } catch (_) {
         }
         const isReminder = transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8\u05D9");
@@ -277,7 +302,22 @@ var worker_default = {
         }
       } catch (_) {
       }
-      if (asksDollarRate(transcribedText) && dollarRate) {
+      const euroQ = asksEuroRate(effectiveText);
+      const currOnlyQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2)/.test(effectiveText) && !asksDollarRate(effectiveText) && !euroQ;
+      if (currOnlyQ) {
+        await saveConvoTurn(env, transcribedText, "\u05D0\u05D9\u05D6\u05D4 \u05DE\u05D8\u05D1\u05E2 \u05D1\u05E8\u05E6\u05D5\u05E0\u05DA \u05DC\u05D1\u05D3\u05D5\u05E7, \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D5 \u05D0\u05D9\u05E8\u05D5?");
+        return speak("\u05D0\u05D9\u05D6\u05D4 \u05DE\u05D8\u05D1\u05E2 \u05D1\u05E8\u05E6\u05D5\u05E0\u05DA \u05DC\u05D1\u05D3\u05D5\u05E7, \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D5 \u05D0\u05D9\u05E8\u05D5?");
+      }
+      if (euroQ) {
+        const eurRate = await currentEuroRate();
+        if (eurRate) {
+          const eShekels = Math.floor(eurRate);
+          const eAgorot = Math.round((eurRate - eShekels) * 100);
+          await saveConvoTurn(env, transcribedText, "\u05E9\u05E2\u05E8 \u05D4\u05D0\u05D9\u05E8\u05D5 \u05D4\u05D5\u05D0 " + eShekels + " \u05E9\u05E7\u05DC\u05D9\u05DD \u05D5 " + eAgorot + " \u05D0\u05D2\u05D5\u05E8\u05D5\u05EA");
+          return speak("\u05E9\u05E2\u05E8 \u05D4\u05D0\u05D9\u05E8\u05D5 \u05DE\u05D5\u05DC \u05D4\u05E9\u05E7\u05DC \u05D4\u05D5\u05D0 " + eShekels + " \u05E9\u05E7\u05DC\u05D9\u05DD \u05D5 " + eAgorot + " \u05D0\u05D2\u05D5\u05E8\u05D5\u05EA");
+        }
+      }
+      if (asksDollarRate(effectiveText) && dollarRate) {
         const shekels = Math.floor(dollarRate.rate);
         const agorot = Math.round((dollarRate.rate - shekels) * 100);
         const shekelWords = ["\u05D0\u05E4\u05E1", "\u05D0\u05D7\u05D3", "\u05E9\u05E0\u05D9\u05D9\u05DD", "\u05E9\u05DC\u05D5\u05E9\u05D4", "\u05D0\u05E8\u05D1\u05E2\u05D4", "\u05D7\u05DE\u05D9\u05E9\u05D4", "\u05E9\u05D9\u05E9\u05D4", "\u05E9\u05D1\u05E2\u05D4", "\u05E9\u05DE\u05D5\u05E0\u05D4", "\u05EA\u05E9\u05E2\u05D4"];
@@ -288,7 +328,8 @@ var worker_default = {
       }
       const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9. \u05EA\u05E9\u05D5\u05D1\u05D4 \u05DE\u05E7\u05E1\u05D9\u05DE\u05DC\u05D9\u05EA 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD. \u05D0\u05DC \u05EA\u05D0\u05E8\u05D9\u05DA. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4 \u05D9\u05E9\u05D9\u05E8\u05D5\u05EA. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA. \u05E2\u05E0\u05D4 \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4 \u05D5\u05D1\u05E8\u05D5\u05E8\u05D4. \u05D0\u05DC \u05EA\u05E9\u05EA\u05DE\u05E9 \u05D1\u05D0\u05E0\u05D2\u05DC\u05D9\u05EA.
 \u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 ${currentTimeIsrael}, \u05D4\u05EA\u05D0\u05E8\u05D9\u05DA ${currentDateIsrael}${hebrewDateStr ? ", " + hebrewDateStr : ""}${parashaStr ? ", " + parashaStr : ""}${usdRateStr ? ". \u05E9\u05E2\u05E8\u05D9 \u05D7\u05DC\u05D9\u05E4\u05D9\u05DF: " + usdRateStr : ""}${weatherStr ? ", " + weatherStr : ""}${btcStr ? ", " + btcStr : ""}${callerName ? ". \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 \u05E0\u05E7\u05E8\u05D0 " + callerName : ""}${liveContext ? ". \u05DE\u05D9\u05D3\u05E2 \u05E0\u05D5\u05E1\u05E3: " + liveContext : ""}`;
-      const useWebSearch = needsWebSearch(transcribedText);
+      const convoCtx = convo && convo.lastUser ? "\u05D1\u05D4\u05DE\u05E9\u05DA \u05DC\u05E9\u05D9\u05D7\u05EA\u05E0\u05D5: \u05E9\u05D0\u05DC\u05EA\u05D9 \u05E7\u05D5\u05D3\u05DD: " + String(convo.lastUser).slice(0, 150) + ", \u05D5\u05E2\u05E0\u05D9\u05EA \u05DC\u05D9: " + String(convo.lastAnswer || "").slice(0, 150) + ". \u05D4\u05D4\u05E9\u05DC\u05D4 \u05D4\u05E0\u05D5\u05DB\u05D7\u05D9\u05EA \u05DE\u05EA\u05D9\u05D7\u05E1\u05EA \u05D0\u05DC\u05D9\u05D4. " : "";
+      const useWebSearch = needsWebSearch(effectiveText);
       let chatRes = null;
       let aiAnswer = "";
       let webVerified = !useWebSearch;
@@ -301,7 +342,7 @@ var worker_default = {
               model: "openai/gpt-oss-20b",
               instructions: `${systemPrompt}
 \u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05DC\u05E4\u05E0\u05D9 \u05D4\u05EA\u05E9\u05D5\u05D1\u05D4. \u05E2\u05E0\u05D4 \u05E8\u05E7 \u05DC\u05E4\u05D9 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA \u05E9\u05DE\u05E6\u05D0\u05EA; \u05D0\u05DD \u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D5 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05E9\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9.`,
-              input: transcribedText,
+              input: convoCtx + effectiveText,
               tools: [{ type: "browser_search" }],
               tool_choice: "required",
               max_output_tokens: 300
@@ -323,13 +364,13 @@ var worker_default = {
           logEvent("web_search_error", { type: e?.name || "Error" });
         }
       } else {
-        const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+        const models = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
         for (const mdl of models) {
           try {
             chatRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
               method: "POST",
               headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({ model: mdl, temperature: 0, max_tokens: 300, reasoning_effort: "low", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: transcribedText }] })
+              body: JSON.stringify({ model: mdl, temperature: 0, max_tokens: 300, reasoning_effort: "low", messages: [{ role: "system", content: systemPrompt }, { role: "user", content: convoCtx + effectiveText }] })
             });
             if (chatRes.ok) {
               const completion = await chatRes.json();
@@ -346,7 +387,7 @@ var worker_default = {
         }
       }
       if (useWebSearch && !webVerified) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9 \u05D1\u05E8\u05E9\u05EA, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05DB\u05DE\u05D4 \u05D3\u05E7\u05D5\u05EA");
-      if (!aiAnswer.trim()) return textResponse("id_list_message=t-לא הצלחתי לבצע את הבקשה כרגע, נסה שוב בעוד רגע");
+      if (!aiAnswer.trim()) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D1\u05E6\u05E2 \u05D0\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05E8\u05D2\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2");
       logEvent("answer_ready", { chars: aiAnswer.length });
       if (callerPhone && env.USER_MEMORY) {
         try {
@@ -358,10 +399,11 @@ var worker_default = {
       }
       const cleanAnswer = makePhoneFriendlyTimes(aiAnswer).replace(/<\/?think>/gi, "").replace(/[\r\n]+/g, " ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!;:]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;:!?\s]+|[,;:\s]+$/g, "");
       if (!cleanAnswer) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D5 \u05E9\u05D5\u05D1");
+      await saveConvoTurn(env, transcribedText, cleanAnswer);
       return textResponse(`id_list_message=t-${cleanAnswer}`);
     } catch (err) {
       logEvent("system_error", { type: err?.name || "Error" });
-      return textResponse("id_list_message=t-משהו בתשובה השתבש, נסה שוב בבקשה");
+      return textResponse("id_list_message=t-\u05DE\u05E9\u05D4\u05D5 \u05D1\u05EA\u05E9\u05D5\u05D1\u05D4 \u05D4\u05E9\u05EA\u05D1\u05E9, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
     }
   }
 };
@@ -375,6 +417,7 @@ function textResponse(text) {
 }
 __name(textResponse, "textResponse");
 __name2(textResponse, "textResponse");
+__name22(textResponse, "textResponse");
 function logEvent(event, details = {}) {
   const safe = { event, at: (/* @__PURE__ */ new Date()).toISOString() };
   for (const [key, value] of Object.entries(details)) {
@@ -385,12 +428,14 @@ function logEvent(event, details = {}) {
 }
 __name(logEvent, "logEvent");
 __name2(logEvent, "logEvent");
+__name22(logEvent, "logEvent");
 function callerTail(phone) {
   const normalized = normalizeIsraelPhone(phone);
   return normalized ? `phone_${normalized.slice(-4)}` : "missing";
 }
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
+__name22(callerTail, "callerTail");
 var BRIDGE_URL = "https://script.google.com/macros/s/AKfycbyxunjICEfNwuvhQNlf7nBJTEJ65IJFLC2dNUjf5TDb4aiGQPRX7cQ0w1RjymEoNhwYzQ/exec";
 async function callBridge(env, payload) {
   const res = await fetch(BRIDGE_URL, {
@@ -402,6 +447,7 @@ async function callBridge(env, payload) {
 }
 __name(callBridge, "callBridge");
 __name2(callBridge, "callBridge");
+__name22(callBridge, "callBridge");
 async function kvGetList(env, key) {
   try {
     const v = await env.USER_MEMORY.get(key);
@@ -412,6 +458,7 @@ async function kvGetList(env, key) {
 }
 __name(kvGetList, "kvGetList");
 __name2(kvGetList, "kvGetList");
+__name22(kvGetList, "kvGetList");
 async function kvSetList(env, key, val) {
   try {
     await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: 600 });
@@ -420,27 +467,32 @@ async function kvSetList(env, key, val) {
 }
 __name(kvSetList, "kvSetList");
 __name2(kvSetList, "kvSetList");
+__name22(kvSetList, "kvSetList");
 function contactStorageKey(callerPhone) {
   return "chat_contacts_" + normalizeIsraelPhone(callerPhone);
 }
 __name(contactStorageKey, "contactStorageKey");
 __name2(contactStorageKey, "contactStorageKey");
+__name22(contactStorageKey, "contactStorageKey");
 function pendingChatStorageKey(callerPhone) {
   return "pending_chat_" + normalizeIsraelPhone(callerPhone);
 }
 __name(pendingChatStorageKey, "pendingChatStorageKey");
 __name2(pendingChatStorageKey, "pendingChatStorageKey");
+__name22(pendingChatStorageKey, "pendingChatStorageKey");
 function normalizeContactTerm(value) {
   return String(value || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 __name(normalizeContactTerm, "normalizeContactTerm");
 __name2(normalizeContactTerm, "normalizeContactTerm");
+__name22(normalizeContactTerm, "normalizeContactTerm");
 async function getContacts(env, callerPhone) {
   const stored = await kvGetList(env, contactStorageKey(callerPhone));
   return Array.isArray(stored) ? stored.filter((contact) => contact && contact.name && contact.address) : [];
 }
 __name(getContacts, "getContacts");
 __name2(getContacts, "getContacts");
+__name22(getContacts, "getContacts");
 async function putContacts(env, callerPhone, contacts) {
   if (!env.USER_MEMORY) return false;
   try {
@@ -452,6 +504,7 @@ async function putContacts(env, callerPhone, contacts) {
 }
 __name(putContacts, "putContacts");
 __name2(putContacts, "putContacts");
+__name22(putContacts, "putContacts");
 function findContactMatches(contacts, requestedName) {
   const wanted = normalizeContactTerm(requestedName);
   if (!wanted) return [];
@@ -461,6 +514,98 @@ function findContactMatches(contacts, requestedName) {
 }
 __name(findContactMatches, "findContactMatches");
 __name2(findContactMatches, "findContactMatches");
+__name22(findContactMatches, "findContactMatches");
+function levenshteinDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+__name(levenshteinDistance, "levenshteinDistance");
+__name2(levenshteinDistance, "levenshteinDistance");
+__name22(levenshteinDistance, "levenshteinDistance");
+function findFuzzyContact(contacts, requestedName) {
+  const wanted = normalizeContactTerm(requestedName);
+  if (!wanted || wanted.length < 2) return null;
+  let best = null, bestScore = 0;
+  for (const contact of contacts || []) {
+    const candidates = [contact.name, ...(contact.aliases || []), String(contact.address || "").split("@")[0]];
+    for (const cand of candidates) {
+      const c = normalizeContactTerm(cand);
+      if (!c) continue;
+      let score = 1 - levenshteinDistance(wanted, c) / Math.max(wanted.length, c.length, 1);
+      if (c.includes(wanted) && wanted.length >= 3) score = Math.max(score, 0.85);
+      if (wanted.includes(c) && c.length >= 3) score = Math.max(score, 0.8);
+      if (score > bestScore) { bestScore = score; best = contact; }
+    }
+  }
+  return bestScore >= 0.62 ? best : null;
+}
+__name(findFuzzyContact, "findFuzzyContact");
+__name2(findFuzzyContact, "findFuzzyContact");
+__name22(findFuzzyContact, "findFuzzyContact");
+function speakAddress(addr) {
+  return String(addr || "").replace(/@/g, " \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC ").replace(/\./g, " \u05E0\u05E7\u05D5\u05D3\u05D4 ");
+}
+__name(speakAddress, "speakAddress");
+__name2(speakAddress, "speakAddress");
+__name22(speakAddress, "speakAddress");
+async function resolveRecipient(env, callerPhone, spoken) {
+  const raw = String(spoken || "").trim();
+  const norm = normalizeAddress(raw);
+  if (norm.includes("@") && norm.split("@")[1] && norm.split("@")[1].includes(".")) return { address: norm, name: "", fuzzy: false };
+  const contacts = callerPhone ? await getContacts(env, callerPhone) : [];
+  const matches = findContactMatches(contacts, raw);
+  if (matches.length === 1) return { address: matches[0].address, name: matches[0].name, fuzzy: false };
+  if (matches.length > 1) return { address: matches[0].address, name: matches[0].name, fuzzy: true };
+  const fuzzy = findFuzzyContact(contacts, raw);
+  if (fuzzy) return { address: fuzzy.address, name: fuzzy.name, fuzzy: true };
+  return null;
+}
+__name(resolveRecipient, "resolveRecipient");
+__name2(resolveRecipient, "resolveRecipient");
+__name22(resolveRecipient, "resolveRecipient");
+async function saveConvoTurn(env, userText, answerText) {
+  try {
+    const callId = String(globalThis.__callId || "").slice(0, 80);
+    if (!env.USER_MEMORY || !callId) return;
+    const key = "convo_" + callId;
+    let prev = {};
+    try { prev = JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
+    const turns = [...(prev.turns || []), { u: String(userText || "").slice(0, 200), a: String(answerText || "").slice(0, 300) }].slice(-6);
+    await env.USER_MEMORY.put(key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
+  } catch (_) {}
+}
+__name(saveConvoTurn, "saveConvoTurn");
+__name2(saveConvoTurn, "saveConvoTurn");
+__name22(saveConvoTurn, "saveConvoTurn");
+function asksEuroRate(text) {
+  const q = String(text || "");
+  return /(?:\u05E9\u05D9?\u05E2\u05E8|\u05DE\u05D7\u05D9\u05E8|\u05DB\u05DE\u05D4).{0,20}(?:\u05D0\u05D9\u05D9?\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5|euro)|(?:\u05D0\u05D9\u05D9?\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5|euro).{0,20}(?:\u05E9\u05D9?\u05E2\u05E8|\u05DE\u05D7\u05D9\u05E8|\u05DB\u05DE\u05D4|\u05E9\u05E7\u05D9\u05DC\u05D9\u05DD)/.test(q);
+}
+__name(asksEuroRate, "asksEuroRate");
+__name2(asksEuroRate, "asksEuroRate");
+__name22(asksEuroRate, "asksEuroRate");
+async function currentEuroRate() {
+  try {
+    const res = await fetch("https://api.frankfurter.dev/v1/latest?from=EUR&to=ILS", { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rate = data?.rates?.ILS;
+    return typeof rate === "number" ? rate : null;
+  } catch (_) {
+    return null;
+  }
+}
+__name(currentEuroRate, "currentEuroRate");
+__name2(currentEuroRate, "currentEuroRate");
+__name22(currentEuroRate, "currentEuroRate");
 async function saveContact(env, callerPhone, name, address, aliases) {
   const contacts = await getContacts(env, callerPhone);
   const normalizedAliases = Array.isArray(aliases) ? aliases.map((alias) => String(alias || "").trim()).filter(Boolean).slice(0, 8) : [];
@@ -472,16 +617,19 @@ async function saveContact(env, callerPhone, name, address, aliases) {
 }
 __name(saveContact, "saveContact");
 __name2(saveContact, "saveContact");
+__name22(saveContact, "saveContact");
 async function getPendingChat(env, callerPhone) {
   return await kvGetList(env, pendingChatStorageKey(callerPhone));
 }
 __name(getPendingChat, "getPendingChat");
 __name2(getPendingChat, "getPendingChat");
+__name22(getPendingChat, "getPendingChat");
 async function setPendingChat(env, callerPhone, value) {
   await kvSetList(env, pendingChatStorageKey(callerPhone), value);
 }
 __name(setPendingChat, "setPendingChat");
 __name2(setPendingChat, "setPendingChat");
+__name22(setPendingChat, "setPendingChat");
 async function clearPendingChat(env, callerPhone) {
   try {
     await env.USER_MEMORY.delete(pendingChatStorageKey(callerPhone));
@@ -490,13 +638,15 @@ async function clearPendingChat(env, callerPhone) {
 }
 __name(clearPendingChat, "clearPendingChat");
 __name2(clearPendingChat, "clearPendingChat");
+__name22(clearPendingChat, "clearPendingChat");
 function contactChoiceNames(contacts) {
   return contacts.map((contact) => contact.name).slice(0, 4).join(" \u05D0\u05D5 ");
 }
 __name(contactChoiceNames, "contactChoiceNames");
 __name2(contactChoiceNames, "contactChoiceNames");
+__name22(contactChoiceNames, "contactChoiceNames");
 async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
-  const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+  const models = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"];
   for (const mdl of models) {
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -514,6 +664,7 @@ async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
 }
 __name(groqChatShort, "groqChatShort");
 __name2(groqChatShort, "groqChatShort");
+__name22(groqChatShort, "groqChatShort");
 function cleanFromName(from) {
   const s = String(from || "");
   const name = s.split("<")[0].replace(/["']/g, "").trim();
@@ -521,6 +672,7 @@ function cleanFromName(from) {
 }
 __name(cleanFromName, "cleanFromName");
 __name2(cleanFromName, "cleanFromName");
+__name22(cleanFromName, "cleanFromName");
 function fmtEmailList(msgs) {
   if (!msgs || !msgs.length) return "\u05D0\u05D9\u05DF \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D7\u05D3\u05E9\u05D9\u05DD \u05D1\u05EA\u05D9\u05D1\u05D4";
   const parts = msgs.map((m, i) => `\u05DE\u05D9\u05D9\u05DC ${i + 1}, \u05DE\u05D0\u05EA ${cleanFromName(m.from)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${(m.subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0").slice(0, 60)}`);
@@ -528,16 +680,21 @@ function fmtEmailList(msgs) {
 }
 __name(fmtEmailList, "fmtEmailList");
 __name2(fmtEmailList, "fmtEmailList");
+__name22(fmtEmailList, "fmtEmailList");
 function normalizeAddress(addr) {
-  return String(addr || "").trim().replace(/שטרודל/g, "@").replace(/נקודה/g, ".").replace(/\s+/g, "");
+  let a = String(addr || "").trim().replace(/שטרודל/g, "@").replace(/נקודה/g, ".").replace(/\s+/g, "");
+  if (a && !a.includes("@") && /^[a-zA-Z0-9._%+-]+$/.test(a)) a = a + "@gmail.com";
+  return a.replace(/[^a-zA-Z0-9._@%+-]/g, "");
 }
 __name(normalizeAddress, "normalizeAddress");
 __name2(normalizeAddress, "normalizeAddress");
+__name22(normalizeAddress, "normalizeAddress");
 function makeRequestId(callerPhone, recordingPath) {
   return `call_${normalizeIsraelPhone(callerPhone) || "unknown"}_${String(recordingPath || "").replace(/[^A-Za-z0-9_-]/g, "_")}`.slice(0, 120);
 }
 __name(makeRequestId, "makeRequestId");
 __name2(makeRequestId, "makeRequestId");
+__name22(makeRequestId, "makeRequestId");
 function normalizeIsraelPhone(phone) {
   let digits = String(phone || "").replace(/\D/g, "");
   if (digits.startsWith("972")) digits = "0" + digits.slice(3);
@@ -545,6 +702,7 @@ function normalizeIsraelPhone(phone) {
 }
 __name(normalizeIsraelPhone, "normalizeIsraelPhone");
 __name2(normalizeIsraelPhone, "normalizeIsraelPhone");
+__name22(normalizeIsraelPhone, "normalizeIsraelPhone");
 async function routeCommunication(env, GROQ_KEY, transcribedText, callerPhone, requestId) {
   const routerPrompt = '\u05D0\u05EA\u05D4 \u05DE\u05DE\u05D9\u05D9\u05DF \u05D1\u05E7\u05E9\u05EA \u05EA\u05E7\u05E9\u05D5\u05E8\u05EA \u05DE\u05D4\u05D8\u05DC\u05E4\u05D5\u05DF. \u05D4\u05D7\u05D6\u05E8 JSON \u05D1\u05DC\u05D1\u05D3: {"service":"email"} \u05DB\u05E9\u05DE\u05D3\u05D5\u05D1\u05E8 \u05D1\u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D3\u05D5\u05D0\u05E8, {"service":"chat"} \u05DB\u05E9\u05DE\u05D3\u05D5\u05D1\u05E8 \u05D1\u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8, \u05E6\u05D0\u05D8 \u05D0\u05D5 \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D4, \u05D0\u05D5 {"service":"ask"} \u05DB\u05E9\u05D0\u05D9 \u05D0\u05E4\u05E9\u05E8 \u05DC\u05D3\u05E2\u05EA. \u05D2\u05DD \u05D0\u05DD \u05D4\u05DE\u05D9\u05DC\u05D4 \u05D4\u05D5\u05E2\u05EA\u05E7\u05D4 \u05DC\u05D0 \u05E0\u05DB\u05D5\u05DF, \u05D4\u05D1\u05DF \u05DC\u05E4\u05D9 \u05DE\u05E9\u05DE\u05E2\u05D5\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4.';
   const raw = await groqChatShort(GROQ_KEY, routerPrompt, transcribedText, 80);
@@ -557,10 +715,12 @@ async function routeCommunication(env, GROQ_KEY, transcribedText, callerPhone, r
   logEvent("communication_routed", { service: String(service).slice(0, 12), caller: callerTail(callerPhone) });
   if (service === "email") return await handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId);
   if (service === "chat") return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, null, requestId);
+  await saveConvoTurn(env, transcribedText, "\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8");
   return speak("\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8. \u05D0\u05DE\u05D5\u05E8 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8 \u05D1\u05EA\u05D7\u05D9\u05DC\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4");
 }
 __name(routeCommunication, "routeCommunication");
 __name2(routeCommunication, "routeCommunication");
+__name22(routeCommunication, "routeCommunication");
 async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const safe = String(promptText || "").replace(/[=\r\n]+/g, " ").slice(0, 300);
   await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
@@ -568,39 +728,41 @@ async function pendingConfirmRead(env, callerPhone, pend, promptText) {
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
 __name2(pendingConfirmRead, "pendingConfirmRead");
+__name22(pendingConfirmRead, "pendingConfirmRead");
 async function handleConfirm(env, confirmValue, callerPhone) {
   try {
-    if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("אין הרשאה לביצוע הפעולה ממספר זה");
+    if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
     const pendKey = "pend_" + normalizeIsraelPhone(callerPhone);
     const raw = await env.USER_MEMORY.get(pendKey);
-    if (!raw) return speak("אין פעולה ממתינה לאישור, הגדר אותה מחדש");
+    if (!raw) return speak("\u05D0\u05D9\u05DF \u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05EA\u05D9\u05E0\u05D4 \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8, \u05D4\u05D2\u05D3\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05DE\u05D7\u05D3\u05E9");
     const pend = JSON.parse(raw);
     await env.USER_MEMORY.delete(pendKey);
     if (String(confirmValue) !== "1") {
       logEvent("action_cancelled", { caller: callerTail(callerPhone) });
-      return speak("הפעולה בוטלה");
+      return speak("\u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05D1\u05D5\u05D8\u05DC\u05D4");
     }
     logEvent("action_confirmed", { kind: String(pend.kind || "?").slice(0, 12), caller: callerTail(callerPhone) });
     if (pend.kind === "email") {
       const data = await callBridge(env, { action: "send", to: pend.to, subject: pend.subject || "", body: pend.body || "", inReplyTo: pend.inReplyTo, threadId: pend.threadId, requestId: "confirm" });
       logEvent("email_send", { ok: Boolean(data.ok), confirmed: true });
-      if (!data.ok) return speak("שליחת המייל נכשלה, נסה שוב");
-      return speak("המייל נשלח בהצלחה");
+      if (!data.ok) return speak("\u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05E0\u05DB\u05E9\u05DC\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
+      return speak("\u05D4\u05DE\u05D9\u05D9\u05DC \u05E0\u05E9\u05DC\u05D7 \u05D1\u05D4\u05E6\u05DC\u05D7\u05D4");
     }
     if (pend.kind === "chat") {
       const data = await callBridge(env, { action: "chat_send_text", to: pend.to, text: pend.text || "", requestId: "confirm" });
       logEvent("chat_send", { ok: Boolean(data.ok), confirmed: true });
-      if (!data.ok) return speak("שליחת הודעת הצאט נכשלה");
-      return speak("הודעת הצאט נשלחה בהצלחה");
+      if (!data.ok) return speak("\u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05EA \u05D4\u05E6\u05D0\u05D8 \u05E0\u05DB\u05E9\u05DC\u05D4");
+      return speak("\u05D4\u05D5\u05D3\u05E2\u05EA \u05D4\u05E6\u05D0\u05D8 \u05E0\u05E9\u05DC\u05D7\u05D4 \u05D1\u05D4\u05E6\u05DC\u05D7\u05D4");
     }
-    return speak("אין פעולה ממתינה לאישור");
+    return speak("\u05D0\u05D9\u05DF \u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05EA\u05D9\u05E0\u05D4 \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8");
   } catch (e) {
     logEvent("confirm_error", { type: e?.name || "Error" });
-    return speak("יש תקלה באישור הפעולה, נסה שוב");
+    return speak("\u05D9\u05E9 \u05EA\u05E7\u05DC\u05D4 \u05D1\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
   }
 }
 __name(handleConfirm, "handleConfirm");
 __name2(handleConfirm, "handleConfirm");
+__name22(handleConfirm, "handleConfirm");
 async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId) {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) {
@@ -609,7 +771,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
     }
-    const plannerSystem = '\u05D0\u05EA\u05D4 \u05DE\u05E0\u05EA\u05E9 \u05D1\u05E7\u05E9\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC \u05DC\u05E4\u05E2\u05D5\u05DC\u05D5\u05EA. \u05D4\u05D7\u05D6\u05E8 JSON \u05D1\u05DC\u05D1\u05D3 \u05D1\u05DC\u05D9 \u05D4\u05E1\u05D1\u05E8\u05D9\u05DD \u05D1\u05E4\u05D5\u05E8\u05DE\u05D8 {"action":"...","params":{}}. \u05D0\u05E4\u05E9\u05E8\u05D5\u05D9\u05D5\u05EA: {"action":"list","params":{"count":5}} \u05E8\u05E9\u05D9\u05DE\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D7\u05E8\u05D5\u05E0\u05D9\u05DD. {"action":"summarize","params":{"count":5}} \u05E1\u05D9\u05DB\u05D5\u05DD \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD. {"action":"read","params":{"index":2}} \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC \u05DC\u05E4\u05D9 \u05DE\u05E1\u05E4\u05E8\u05D5 \u05D1\u05E8\u05E9\u05D9\u05DE\u05D4. {"action":"search","params":{"query":"..."}} \u05D7\u05D9\u05E4\u05D5\u05E9 \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC \u05D7\u05D3\u05E9. {"action":"reply","params":{"index":1,"body":"..."}} \u05DE\u05E2\u05E0\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC. {"action":"forward","params":{"index":1,"to":"..."}} \u05D4\u05E2\u05D1\u05E8\u05EA \u05DE\u05D9\u05D9\u05DC. \u05D1\u05DB\u05EA\u05D5\u05D1\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC: \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05E4\u05D9\u05E8\u05D5\u05E9\u05D5 \u05E1\u05D9\u05DE\u05DF @ \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4 \u05E4\u05D9\u05E8\u05D5\u05E9\u05D4 \u05E0\u05E7\u05D5\u05D3\u05D4. \u05D0\u05DD \u05D1\u05DB\u05EA\u05D5\u05D1\u05EA \u05D0\u05D9\u05DF \u05D3\u05D5\u05DE\u05D9\u05D9\u05DF \u05D4\u05D5\u05E1\u05E3 @gmail.com. \u05D0\u05DD \u05D4\u05D1\u05E7\u05E9\u05D4 \u05DC\u05D0 \u05D1\u05E8\u05D5\u05E8\u05D4 \u05D4\u05D7\u05D6\u05E8 {"action":"none"}.';
+    const plannerSystem = '\u05D0\u05EA\u05D4 \u05DE\u05E0\u05EA\u05E9 \u05D1\u05E7\u05E9\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC \u05DC\u05E4\u05E2\u05D5\u05DC\u05D5\u05EA. \u05D4\u05D7\u05D6\u05E8 JSON \u05D1\u05DC\u05D1\u05D3 \u05D1\u05DC\u05D9 \u05D4\u05E1\u05D1\u05E8\u05D9\u05DD \u05D1\u05E4\u05D5\u05E8\u05DE\u05D8 {"action":"...","params":{}}. \u05D0\u05E4\u05E9\u05E8\u05D5\u05D9\u05D5\u05EA: {"action":"list","params":{"count":5}} \u05E8\u05E9\u05D9\u05DE\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D7\u05E8\u05D5\u05E0\u05D9\u05DD. {"action":"summarize","params":{"count":5}} \u05E1\u05D9\u05DB\u05D5\u05DD \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD. {"action":"read","params":{"index":2}} \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC \u05DC\u05E4\u05D9 \u05DE\u05E1\u05E4\u05E8\u05D5 \u05D1\u05E8\u05E9\u05D9\u05DE\u05D4. {"action":"search","params":{"query":"..."}} \u05D7\u05D9\u05E4\u05D5\u05E9 \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC \u05D7\u05D3\u05E9. {"action":"reply","params":{"index":1,"body":"..."}} \u05DE\u05E2\u05E0\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC. {"action":"forward","params":{"index":1,"to":"..."}} \u05D4\u05E2\u05D1\u05E8\u05EA \u05DE\u05D9\u05D9\u05DC. \u05D1\u05DB\u05EA\u05D5\u05D1\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC: \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05E4\u05D9\u05E8\u05D5\u05E9\u05D5 \u05E1\u05D9\u05DE\u05DF @ \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4 \u05E4\u05D9\u05E8\u05D5\u05E9\u05D4 \u05E0\u05E7\u05D5\u05D3\u05D4. \u05D0\u05DD \u05D4\u05E0\u05DE\u05E2\u05DF \u05E0\u05D0\u05DE\u05E8 \u05D1\u05E9\u05DD \u05D0\u05D5 \u05D1\u05DB\u05D9\u05E0\u05D5\u05D9 \u05D5\u05DC\u05D0 \u05D1\u05DB\u05EA\u05D5\u05D1\u05EA \u05DE\u05DC\u05D0\u05D4, \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05E9\u05DD \u05E9\u05E0\u05D0\u05DE\u05E8 \u05D1\u05E9\u05D3\u05D4 to \u05D5\u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3 \u05D3\u05D5\u05DE\u05D9\u05D9\u05DF \u05D0\u05D5 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D1\u05E2\u05E6\u05DE\u05DA. \u05D2\u05DD \u05D0\u05DD \u05D4\u05E0\u05DE\u05E2\u05DF \u05DC\u05D0 \u05DE\u05D5\u05DB\u05E8 \u05DC\u05DA, \u05D0\u05DD \u05D6\u05D5 \u05D1\u05E7\u05E9\u05EA \u05E9\u05DC\u05D9\u05D7\u05D4 \u05D1\u05E8\u05D5\u05E8\u05D4 \u05D4\u05D7\u05D6\u05E8 send \u05E2\u05DD \u05D4\u05E9\u05DD \u05E9\u05E0\u05D0\u05DE\u05E8. \u05DB\u05EA\u05D5\u05D1\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC \u05EA\u05DE\u05D9\u05D3 \u05D1\u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05D1\u05D0\u05E0\u05D2\u05DC\u05D9\u05EA \u05D1\u05DC\u05D1\u05D3. \u05D0\u05DD \u05D4\u05D1\u05E7\u05E9\u05D4 \u05DC\u05D0 \u05D1\u05E8\u05D5\u05E8\u05D4 \u05D4\u05D7\u05D6\u05E8 {"action":"none"}.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
@@ -622,6 +784,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (!plan.action || plan.action === "none") {
       logEvent("email_plan_unclear", { caller: callerTail(callerPhone) });
       if (/(?:שלח|תשלח|שלוח|שליחה|העבר|תעביר)/.test(transcribedText)) return speak("\u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05D5\u05D0\u05EA \u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4, \u05DC\u05DE\u05E9\u05DC \u05E9\u05DC\u05D7 \u05DE\u05D9\u05D9\u05DC \u05DC\u05DB\u05EA\u05D5\u05D1\u05EA, \u05E2\u05DD \u05D4\u05D5\u05D3\u05E2\u05D4");
+      await saveConvoTurn(env, transcribedText, "\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05D9\u05D6\u05D5 \u05E4\u05E2\u05D5\u05DC\u05EA \u05DE\u05D9\u05D9\u05DC \u05D1\u05E8\u05E6\u05D5\u05E0\u05DA \u05DC\u05D1\u05E6\u05E2");
       return speak("\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05D9\u05D6\u05D5 \u05E4\u05E2\u05D5\u05DC\u05EA \u05DE\u05D9\u05D9\u05DC \u05D1\u05E8\u05E6\u05D5\u05E0\u05DA \u05DC\u05D1\u05E6\u05E2");
     }
     const p = plan.params || {};
@@ -655,12 +818,18 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
       return speak(ans || "\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D4\u05E7\u05E8\u05D9\u05D0 \u05D0\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC");
     }
     if (plan.action === "send") {
-      const to = normalizeAddress(p.to);
-      if (!to.includes("@") || !to.split("@")[1]) return speak("\u05D0\u05DE\u05D5\u05E8 \u05E9\u05D5\u05D1 \u05D0\u05EA \u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC, \u05DB\u05D5\u05DC\u05DC \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC");
+      let to = normalizeAddress(p.to);
+      let resolveNote = "";
+      if (!to.includes("@") || !to.split("@")[1]) {
+        const resolved = await resolveRecipient(env, callerPhone, p.to);
+        if (!resolved) return speak("\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D6\u05D4. \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05DC\u05D0\u05D4 \u05DB\u05D5\u05DC\u05DC \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC, \u05D0\u05D5 \u05D0\u05DE\u05D5\u05E8 \u05D1\u05E6\u05D0\u05D8 \u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05E9\u05DD \u05D5\u05DB\u05EA\u05D5\u05D1\u05EA");
+        to = resolved.address;
+        if (resolved.fuzzy) resolveNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + resolved.name + "? ";
+      }
       if (!to.split("@")[1].includes(".")) return speak("\u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05D7\u05E1\u05E8\u05D4 \u05E1\u05D9\u05D5\u05DE\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05D9\u05E8\u05D5\u05E8");
-if (env.USER_MEMORY) {
+      if (env.USER_MEMORY) {
         logEvent("email_send_pending_confirm", { caller: callerTail(callerPhone) });
-        return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: p.subject || "", body: p.body || "" }, `לשלוח מייל אל ${to}, בנושא ${p.subject || "ללא נושא"}, עם התוכן ${p.body || "ריק"}? לאישור הקש אחת, לביטול הקש שתיים`);
+        return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: p.subject || "", body: p.body || "" }, `${resolveNote}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05DC ${speakAddress(to)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${p.subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0"}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${p.body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
       }
       const data = await callBridge(env, { action: "send", to, subject: p.subject || "", body: p.body || "", requestId });
       logEvent("email_send", { ok: Boolean(data.ok) });
@@ -678,7 +847,7 @@ if (env.USER_MEMORY) {
         const subj = (data.subject || "").startsWith("Re:") ? data.subject : "Re: " + (data.subject || "");
         if (env.USER_MEMORY) {
           logEvent("email_reply_pending_confirm", { caller: callerTail(callerPhone) });
-          return await pendingConfirmRead(env, callerPhone, { kind: "email", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId }, `לענות למייל מאת ${cleanFromName(data.from)}, בנושא ${data.subject || ""}, עם התוכן ${p.body || "ריק"}? לאישור הקש אחת, לביטול הקש שתיים`);
+          return await pendingConfirmRead(env, callerPhone, { kind: "email", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId }, `\u05DC\u05E2\u05E0\u05D5\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC \u05DE\u05D0\u05EA ${cleanFromName(data.from)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${data.subject || ""}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${p.body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
         }
         const snd2 = await callBridge(env, { action: "send", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId, requestId });
         if (!snd2.ok) return speak("\u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05EA\u05E9\u05D5\u05D1\u05D4 \u05E0\u05DB\u05E9\u05DC\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
@@ -689,7 +858,7 @@ if (env.USER_MEMORY) {
       const fwdBody = "\u05D4\u05D5\u05D3\u05E2\u05D4 \u05E9\u05D4\u05D5\u05E2\u05D1\u05E8\u05D4 \u05D0\u05DC\u05D9\u05DA:\n" + (data.body || "").slice(0, 3e3);
       if (env.USER_MEMORY) {
         logEvent("email_forward_pending_confirm", { caller: callerTail(callerPhone) });
-        return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "העברה של " + (data.subject || "מייל"), body: fwdBody }, `להעביר את המייל בנושא ${data.subject || ""} אל ${to}? לאישור הקש אחת, לביטול הקש שתיים`);
+        return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "\u05D4\u05E2\u05D1\u05E8\u05D4 \u05E9\u05DC " + (data.subject || "\u05DE\u05D9\u05D9\u05DC"), body: fwdBody }, `\u05DC\u05D4\u05E2\u05D1\u05D9\u05E8 \u05D0\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05D1\u05E0\u05D5\u05E9\u05D0 ${data.subject || ""} \u05D0\u05DC ${to}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
       }
       const snd = await callBridge(env, { action: "send", to, subject: "\u05D4\u05E2\u05D1\u05E8\u05D4 \u05E9\u05DC " + (data.subject || "\u05DE\u05D9\u05D9\u05DC"), body: fwdBody, requestId });
       if (!snd.ok) return speak("\u05D4\u05E2\u05D1\u05E8\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05E0\u05DB\u05E9\u05DC\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
@@ -703,6 +872,7 @@ if (env.USER_MEMORY) {
 }
 __name(handleEmail, "handleEmail");
 __name2(handleEmail, "handleEmail");
+__name22(handleEmail, "handleEmail");
 function fmtChatList(messages) {
   if (!messages || !messages.length) return "\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8 \u05DE\u05EA\u05D0\u05D9\u05DE\u05D5\u05EA";
   const parts = messages.slice(0, 5).map((message, index) => `\u05D4\u05D5\u05D3\u05E2\u05D4 ${index + 1}, \u05DE\u05D0\u05EA ${cleanFromName(message.sender || "\u05E9\u05D5\u05DC\u05D7 \u05DC\u05D0 \u05D9\u05D3\u05D5\u05E2")}, ${String(message.text || "\u05D4\u05D5\u05D3\u05E2\u05D4 \u05DC\u05DC\u05D0 \u05D8\u05E7\u05E1\u05D8").slice(0, 140)}`);
@@ -710,18 +880,30 @@ function fmtChatList(messages) {
 }
 __name(fmtChatList, "fmtChatList");
 __name2(fmtChatList, "fmtChatList");
+__name22(fmtChatList, "fmtChatList");
 async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, pendingChat = null, requestId = "") {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("\u05D4\u05D2\u05D9\u05E9\u05D4 \u05DC\u05E6\u05D0\u05D8 \u05E2\u05D3\u05D9\u05D9\u05DF \u05D1\u05D4\u05D2\u05D3\u05E8\u05D4");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("\u05D4\u05D2\u05D9\u05E9\u05D4 \u05DC\u05E6\u05D0\u05D8 \u05DE\u05D5\u05EA\u05E8\u05EA \u05E8\u05E7 \u05DE\u05D4\u05D8\u05DC\u05E4\u05D5\u05DF \u05E9\u05DC \u05D1\u05E2\u05DC \u05D4\u05D7\u05E9\u05D1\u05D5\u05DF");
     if (pendingChat && transcribedText.length <= 80) {
       const matches = findContactMatches(pendingChat.matches || [], transcribedText);
+      if (!matches.length) {
+        const fuzzyContact = findFuzzyContact(pendingChat.matches || [], transcribedText);
+        if (fuzzyContact) {
+          if (env.USER_MEMORY) {
+            const pend = { kind: "chat", to: fuzzyContact.address, text: pendingChat.text || "" };
+            await clearPendingChat(env, callerPhone);
+            logEvent("chat_send_pending_confirm", { fuzzy: true, caller: callerTail(callerPhone) });
+            return await pendingConfirmRead(env, callerPhone, pend, "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + fuzzyContact.name + "? \u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC " + speakAddress(fuzzyContact.address) + " \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 " + (pendingChat.text || "") + "? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD");
+          }
+        }
+      }
       if (matches.length === 1) {
         if (env.USER_MEMORY) {
           const pend = { kind: "chat", to: matches[0].address, text: pendingChat.text || "" };
           await clearPendingChat(env, callerPhone);
           logEvent("chat_send_pending_confirm", { caller: callerTail(callerPhone) });
-          return await pendingConfirmRead(env, callerPhone, pend, `לשלוח בצאט אל ${matches[0].address} את ההודעה ${pendingChat.text || ""}? לאישור הקש אחת, לביטול הקש שתיים`);
+          return await pendingConfirmRead(env, callerPhone, pend, `\u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC ${matches[0].address} \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 ${pendingChat.text || ""}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
         }
         const data = await callBridge(env, { action: "chat_send_text", to: matches[0].address, text: pendingChat.text || "", requestId });
         logEvent("chat_pending_send", { ok: Boolean(data.ok) });
@@ -731,7 +913,7 @@ async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, pen
       }
       return speak(`\u05DE\u05E6\u05D0\u05EA\u05D9 \u05DB\u05DE\u05D4 \u05D0\u05E0\u05E9\u05D9 \u05E7\u05E9\u05E8 \u05DE\u05EA\u05D0\u05D9\u05DE\u05D9\u05DD, \u05D0\u05DE\u05D5\u05E8 \u05E9\u05DD \u05DE\u05DC\u05D0: ${contactChoiceNames(pendingChat.matches || [])}`);
     }
-    const planner = `\u05D0\u05EA\u05D4 \u05DE\u05E0\u05EA\u05D7 \u05D1\u05E7\u05E9\u05D5\u05EA \u05DC Google Chat. \u05D4\u05D7\u05D6\u05E8 JSON \u05D1\u05DC\u05D1\u05D3 \u05D1\u05DC\u05D9 \u05D4\u05E1\u05D1\u05E8\u05D9\u05DD \u05D1\u05E4\u05D5\u05E8\u05DE\u05D8 {"action":"...","params":{}}. \u05E4\u05E2\u05D5\u05DC\u05D5\u05EA: unread \u05DC\u05E7\u05D1\u05DC\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA, search \u05DC\u05D7\u05D9\u05E4\u05D5\u05E9 \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05DC\u05E4\u05D9 \u05DE\u05D9\u05DC\u05D9\u05DD, read \u05DC\u05E7\u05E8\u05D9\u05D0\u05EA \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DC\u05E4\u05D9 \u05DE\u05E1\u05E4\u05E8 \u05DE\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D4, send_text \u05DC\u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05EA \u05D8\u05E7\u05E1\u05D8, save_contact \u05DC\u05E9\u05DE\u05D9\u05E8\u05EA \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8. \u05DC\u05E9\u05DC\u05D9\u05D7\u05D4 \u05D4\u05D7\u05D6\u05E8 {"action":"send_text","params":{"to":"\u05E9\u05DD \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05DB\u05D9\u05E0\u05D5\u05D9, \u05D0\u05D5 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D0\u05D9\u05DE\u05D9\u05D9\u05DC \u05DE\u05DC\u05D0\u05D4","text":"\u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4"}}. \u05DC\u05E9\u05DE\u05D9\u05E8\u05EA \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D4\u05D7\u05D6\u05E8 {"action":"save_contact","params":{"name":"\u05E9\u05DD","address":"\u05DB\u05EA\u05D5\u05D1\u05EA \u05D0\u05D9\u05DE\u05D9\u05D9\u05DC \u05DE\u05DC\u05D0\u05D4","aliases":["\u05DB\u05D9\u05E0\u05D5\u05D9"]}}. \u05D4\u05DE\u05D9\u05DC\u05D4 \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05D4\u05D9\u05D0 @ \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4 \u05D4\u05D9\u05D0 . \u05D0\u05D9\u05DF \u05DC\u05E0\u05D7\u05E9 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D7\u05E1\u05E8\u05D4. \u05DB\u05E9\u05DE\u05D1\u05E7\u05E9\u05D9\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05D4\u05D5\u05D3\u05E2\u05EA \u05E7\u05D5\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DE\u05EA\u05D5\u05DE\u05DC\u05DC\u05EA, \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05D4\u05D9\u05D0 send_text \u05D5\u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05D5\u05D0 \u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 \u05E9\u05E0\u05D0\u05DE\u05E8. \u05DB\u05E9\u05DC\u05D0 \u05D1\u05E8\u05D5\u05E8 \u05D4\u05D7\u05D6\u05E8 {"action":"none","params":{}}.`;
+    const planner = `\u05D0\u05EA\u05D4 \u05DE\u05E0\u05EA\u05D7 \u05D1\u05E7\u05E9\u05D5\u05EA \u05DC Google Chat. \u05D4\u05D7\u05D6\u05E8 JSON \u05D1\u05DC\u05D1\u05D3 \u05D1\u05DC\u05D9 \u05D4\u05E1\u05D1\u05E8\u05D9\u05DD \u05D1\u05E4\u05D5\u05E8\u05DE\u05D8 {"action":"...","params":{}}. \u05E4\u05E2\u05D5\u05DC\u05D5\u05EA: unread \u05DC\u05E7\u05D1\u05DC\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA, search \u05DC\u05D7\u05D9\u05E4\u05D5\u05E9 \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05DC\u05E4\u05D9 \u05DE\u05D9\u05DC\u05D9\u05DD, read \u05DC\u05E7\u05E8\u05D9\u05D0\u05EA \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DC\u05E4\u05D9 \u05DE\u05E1\u05E4\u05E8 \u05DE\u05D4\u05E8\u05E9\u05D9\u05DE\u05D4 \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D4, send_text \u05DC\u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05EA \u05D8\u05E7\u05E1\u05D8, save_contact \u05DC\u05E9\u05DE\u05D9\u05E8\u05EA \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8. \u05DC\u05E9\u05DC\u05D9\u05D7\u05D4 \u05D4\u05D7\u05D6\u05E8 {"action":"send_text","params":{"to":"\u05E9\u05DD \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05DB\u05D9\u05E0\u05D5\u05D9, \u05D0\u05D5 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D0\u05D9\u05DE\u05D9\u05D9\u05DC \u05DE\u05DC\u05D0\u05D4","text":"\u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4"}}. \u05DC\u05E9\u05DE\u05D9\u05E8\u05EA \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D4\u05D7\u05D6\u05E8 {"action":"save_contact","params":{"name":"\u05E9\u05DD","address":"\u05DB\u05EA\u05D5\u05D1\u05EA \u05D0\u05D9\u05DE\u05D9\u05D9\u05DC \u05DE\u05DC\u05D0\u05D4","aliases":["\u05DB\u05D9\u05E0\u05D5\u05D9"]}}. \u05D4\u05DE\u05D9\u05DC\u05D4 \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05D4\u05D9\u05D0 @ \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4 \u05D4\u05D9\u05D0 . \u05D0\u05D9\u05DF \u05DC\u05E0\u05D7\u05E9 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D7\u05E1\u05E8\u05D4. \u05DB\u05E9\u05DE\u05D1\u05E7\u05E9\u05D9\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05D4\u05D5\u05D3\u05E2\u05EA \u05E7\u05D5\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DE\u05EA\u05D5\u05DE\u05DC\u05DC\u05EA, \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05D4\u05D9\u05D0 send_text \u05D5\u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05D5\u05D0 \u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 \u05E9\u05E0\u05D0\u05DE\u05E8. \u05DB\u05E9\u05DC\u05D0 \u05D1\u05E8\u05D5\u05E8 \u05D4\u05D7\u05D6\u05E8 {"action":"none","params":{}}. \u05DB\u05EA\u05D5\u05D1\u05D5\u05EA \u05DE\u05D9\u05D9\u05DC \u05D1\u05D0\u05E0\u05D2\u05DC\u05D9\u05EA \u05D1\u05DC\u05D1\u05D3. \u05D0\u05DD \u05D4\u05E0\u05DE\u05E2\u05DF \u05E0\u05D0\u05DE\u05E8 \u05D1\u05E9\u05DD, \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05E9\u05DD \u05DB\u05E4\u05D9 \u05E9\u05E0\u05D0\u05DE\u05E8 \u05D1\u05DC\u05D1\u05D3 \u05D5\u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05DB\u05EA\u05D5\u05D1\u05EA \u05D1\u05E2\u05E6\u05DE\u05DA.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
@@ -773,18 +955,26 @@ async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, pen
       const text = String(params.text || "").trim();
       if (!text) return speak("\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05EA \u05EA\u05D5\u05DB\u05DF \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4");
       let to = directAddress;
+      let fuzzyNote = "";
       if (!to.includes("@") || !to.split("@")[1]?.includes(".")) {
         const matches = findContactMatches(await getContacts(env, callerPhone), requestedTo);
-        if (!matches.length) return speak("\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D4\u05D6\u05D4. \u05DB\u05D3\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D0\u05DE\u05D5\u05E8, \u05D1\u05E6\u05D0\u05D8 \u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05E9\u05DD, \u05DB\u05EA\u05D5\u05D1\u05EA \u05DE\u05D9\u05D9\u05DC \u05D5\u05DB\u05D9\u05E0\u05D5\u05D9");
+        if (!matches.length) {
+          const allContacts = await getContacts(env, callerPhone);
+          const fuzzyContact = findFuzzyContact(allContacts, requestedTo);
+          if (!fuzzyContact) return speak("\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D4\u05D6\u05D4. \u05DB\u05D3\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D0\u05DE\u05D5\u05E8, \u05D1\u05E6\u05D0\u05D8 \u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05E9\u05DD, \u05DB\u05EA\u05D5\u05D1\u05EA \u05DE\u05D9\u05D9\u05DC \u05D5\u05DB\u05D9\u05E0\u05D5\u05D9");
+          to = fuzzyContact.address;
+          fuzzyNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + fuzzyContact.name + "? ";
+        }
+        else
         if (matches.length > 1) {
           await setPendingChat(env, callerPhone, { text, matches: matches.map((contact) => ({ name: contact.name, address: contact.address, aliases: contact.aliases || [] })) });
           return speak(`\u05DE\u05E6\u05D0\u05EA\u05D9 \u05DB\u05DE\u05D4 \u05D0\u05E0\u05E9\u05D9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D4\u05D6\u05D4: ${contactChoiceNames(matches)}. \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05E9\u05DD \u05D4\u05DE\u05DC\u05D0`);
         }
         to = matches[0].address;
       }
-if (env.USER_MEMORY) {
+      if (env.USER_MEMORY) {
         logEvent("chat_send_pending_confirm", { caller: callerTail(callerPhone) });
-        return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text }, `לשלוח בצאט אל ${to} את ההודעה ${text}? לאישור הקש אחת, לביטול הקש שתיים`);
+        return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text }, `${fuzzyNote}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC ${speakAddress(to)} \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 ${text}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
       }
       const data = await callBridge(env, { action: "chat_send_text", to, text, requestId });
       logEvent("chat_send", { ok: Boolean(data.ok), usedContact: to !== directAddress });
@@ -799,6 +989,7 @@ if (env.USER_MEMORY) {
 }
 __name(handleGoogleChat, "handleGoogleChat");
 __name2(handleGoogleChat, "handleGoogleChat");
+__name22(handleGoogleChat, "handleGoogleChat");
 function speak(text) {
   const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
   if (!clean) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
@@ -806,7 +997,8 @@ function speak(text) {
 }
 __name(speak, "speak");
 __name2(speak, "speak");
+__name22(speak, "speak");
 export {
   worker_default as default
 };
-//# sourceMappingURL=active-worker.js.map
+//# sourceMappingURL=worker.js.map
