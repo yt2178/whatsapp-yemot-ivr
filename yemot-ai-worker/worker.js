@@ -953,10 +953,9 @@ async function saveConvoTurn(env, userText, answerText) {
     const callId = String(globalThis.__callId || "").slice(0, 80);
     if (!env.USER_MEMORY || !callId) return;
     const key = "convo_" + callId;
-    let prev = {};
-    try { prev = JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
+    let prev = {}; try { const pDo = await doStateFetch(env, key, "GET"); prev = (pDo && pDo.value && pDo.value.turns) ? pDo.value : JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
     const turns = [...(prev.turns || []), { u: String(userText || "").slice(0, 200), a: String(answerText || "").slice(0, 300) }].slice(-6);
-    await doStateFetch(env, key, "PUT", { turns, lastUser: String(userText || "").slice(0, 200), lastAns: String(answerText || "").slice(0, 300), ts: Date.now() });
+    await doStateFetch(env, key, "PUT", { turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() });
     await env.USER_MEMORY.put(key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
   } catch (_) {}
 }
