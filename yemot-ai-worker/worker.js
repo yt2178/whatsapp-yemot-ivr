@@ -849,23 +849,20 @@ __name(executeContinuation, "executeContinuation");
 __name2(executeContinuation, "executeContinuation");
 __name22(executeContinuation, "executeContinuation");
 function buildWhisperPrompt(contacts) {
-  const base = "\u05E9\u05D9\u05D7\u05D4 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05DF. \u05DE\u05D5\u05E0\u05D7\u05D9\u05DD: \u05EA\u05D6\u05DB\u05D9\u05E8, \u05E9\u05E2\u05D4, \u05EA\u05D0\u05E8\u05D9\u05DA, \u05D3\u05D5\u05DC\u05E8, \u05D0\u05D9\u05E8\u05D5, \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC, \u05E0\u05E7\u05D5\u05D3\u05D4, \u05DE\u05D9\u05D9\u05DC, \u05E6\u05D0\u05D8, \u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF.";
+  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, שעה, תאריך, דולר, אירו, שטרודל, נקודה, מייל, צאט.";
   const names = [];
-  for (const c of (contacts || []).slice(0, 40)) {
-    for (const v of [c.name, ...(c.aliases || [])]) {
-      const n = String(v || "").trim();
-      if (n.length >= 2 && n.length <= 30 && /^[\u05D0-\u05EAa-zA-Z0-9 .]+$/.test(n) && !names.includes(n)) names.push(n);
-      if (names.length >= 40) break;
-    }
-    if (names.length >= 40) break;
+  for (const c of contacts || []) {
+    const n = String(c && c.name || "").trim();
+    if (n.length >= 2 && n.length <= 14 && /^[\u05D0-\u05EA\s]+$/.test(n) && !names.includes(n)) names.push(n);
+    if (names.length >= 8) break;
   }
-  if (!names.length) return base;
-  return (base + " \u05E9\u05DE\u05D5\u05EA \u05D0\u05E0\u05E9\u05D9 \u05E7\u05E9\u05E8 \u05D0\u05E4\u05E9\u05E8\u05D9\u05D9\u05DD: " + names.join(", ").slice(0, 700) + ".").slice(0, 900);
+  if (names.length) p += " שמות: " + names.join(", ").slice(0, 90) + ".";
+  return p.slice(0, 220);
 }
 __name(buildWhisperPrompt, "buildWhisperPrompt");
 __name2(buildWhisperPrompt, "buildWhisperPrompt");
 __name22(buildWhisperPrompt, "buildWhisperPrompt");
-function findContactMatches(contacts, requestedName) {
+) {
   const variants = nameVariants(requestedName);
   for (const wanted of variants) {
     if (wanted.length < 2) continue;
