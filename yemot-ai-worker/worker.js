@@ -464,7 +464,38 @@ var worker_default = {
         const isReminder = transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8\u05D9");
         if (isReminder && callerPhone && env.USER_MEMORY) {
           const hourMatch = transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
-          const hour = hourMatch ? parseInt(hourMatch[1]) : 8;
+          const _rt = transcribedText;
+          const _B = "(?:^|(?<=[\u05D1\u05DC])|[^\u05D0-\u05EA0-9])";
+          const _E = "(?:$|[^\u05D0-\u05EA0-9])";
+          let hour = hourMatch ? parseInt(hourMatch[1]) : null;
+          if (hour === null && /\u05D1\u05D5\u05E7\u05E8|\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD|\u05E2\u05E8\u05D1|\u05DC\u05D9\u05DC\u05D4|\u05D1\u05E9\u05E2\u05D4/.test(_rt)) {
+            const _hw = [
+              [_B + "(?:\u05D0\u05D7\u05EA|\u05D0\u05D7\u05D3)[ ]?\u05E2\u05E9\u05E8\u05D4?" + _E, 11],
+              [_B + "\u05E9\u05EA(?:\u05D9\u05D9\u05DD|\u05D9\u05DD|\u05D9)[ ]?\u05E2\u05E9\u05E8\u05D4?" + _E, 12],
+              [_B + "\u05E9\u05EA(?:\u05D9\u05D9\u05DD|\u05D9\u05DD|\u05D9)" + _E, 2],
+              [_B + "(?:\u05E9\u05DC\u05D5\u05E9|\u05E9\u05DC\u05E9)" + _E, 3],
+              [_B + "\u05D0\u05E8\u05D1\u05E2" + _E, 4],
+              [_B + "\u05D7\u05DE\u05E9" + _E, 5],
+              [_B + "\u05E9\u05E9\u05D4?" + _E, 6],
+              [_B + "\u05E9\u05D1\u05E2\u05D4?" + _E, 7],
+              [_B + "\u05E9\u05DE\u05D5\u05E0\u05D4" + _E, 8],
+              [_B + "\u05EA\u05E9\u05E2\u05D4?" + _E, 9],
+              [_B + "\u05E2\u05E9\u05E8\u05D4?" + _E, 10],
+              [_B + "(?:\u05D0\u05D7\u05EA|\u05D0\u05D7\u05D3)" + _E, 1]
+            ];
+            for (const _p of _hw) {
+              const _m = new RegExp(_p[0]).exec(_rt);
+              if (_m && !/^\u05D3\u05E7\u05D5\u05EA/.test(_rt.slice(_m.index + _m[0].length).trim())) { hour = _p[1]; break; }
+            }
+          }
+          if (hour === null) {
+            if (/\u05D1\u05D5\u05E7\u05E8/.test(_rt)) hour = 8;
+            else if (/\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD/.test(_rt)) hour = 12;
+            else if (/\u05E2\u05E8\u05D1/.test(_rt)) hour = 19;
+            else if (/\u05DC\u05D9\u05DC\u05D4/.test(_rt)) hour = 21;
+            else hour = 8;
+          }
+          if (!hourMatch && /(\u05D1\u05E2\u05E8\u05D1|\u05D1\u05DC\u05D9\u05DC\u05D4)/.test(_rt) && !/\u05D1\u05D1\u05D5\u05E7\u05E8/.test(_rt) && hour < 12) hour += 12;
           const minute = hourMatch?.[2] ? parseInt(hourMatch[2]) : 0;
           const isTomorrow = transcribedText.includes("\u05DE\u05D7\u05E8");
           const nowForRem = /* @__PURE__ */ new Date();
