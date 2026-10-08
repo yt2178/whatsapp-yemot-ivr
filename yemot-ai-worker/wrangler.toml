@@ -25,3 +25,7 @@ bindings = [
 [[migrations]]
 tag = "v1_cont_state"
 new_sqlite_classes = ["ContState"]
+
+# ── CRON: בדיקת תזכורות לצורך צינטוק ──
+[triggers]
+crons = ["*/10 * * * *"]
