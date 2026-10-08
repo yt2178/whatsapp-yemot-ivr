@@ -122,6 +122,36 @@ function makePhoneFriendlyTimes(answer) {
 __name(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 __name2(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 var worker_default = {
+  async scheduled(event, env, ctx) {
+    try {
+      const YEMOT_TOKEN_S = env.YEMOT_TOKEN || "";
+      let cursor;
+      do {
+        const listRes = await env.USER_MEMORY.list({ prefix: "reminder_" });
+        for (const k of listRes.keys || []) {
+          try {
+            const raw = await env.USER_MEMORY.get(k.name);
+            if (!raw) continue;
+            const r = JSON.parse(raw);
+            const phone = k.name.replace("reminder_", "");
+            if (!r.notified && r.fireAt && Date.now() >= new Date(r.fireAt).getTime()) {
+              if (YEMOT_TOKEN_S) {
+                try {
+                  const tz = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?token=${YEMOT_TOKEN_S}&phones=tzl:${phone}`);
+                  logEvent("reminder_tzintuk_sent", { caller: callerTail(phone), status: tz.status });
+                } catch (_) {
+                }
+              }
+              await env.USER_MEMORY.put(k.name, JSON.stringify({ ...r, notified: true }), { expirationTtl: 86400 });
+            }
+          } catch (_) {
+          }
+        }
+        cursor = listRes.list_complete ? void 0 : listRes.cursor;
+      } while (cursor);
+    } catch (_) {
+    }
+  },
   async fetch(request, env, ctx) {
     const GROQ_KEY = env.GROQ_KEY || "";
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
@@ -196,6 +226,14 @@ var worker_default = {
         if (p.startsWith("/")) p = p.substring(1);
       }
       const requestId = makeRequestId(callerPhone, p);
+      const isSim = String(params.ApiCallId || "").startsWith("sim_") && typeof params.t === "string" && params.t.trim().length > 0;
+      let transcribedText = "";
+      let whisperContacts = [];
+      if (isSim) {
+        transcribedText = params.t.trim();
+        whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
+        logEvent("sim_turn", { caller: callerTail(callerPhone), len: transcribedText.length });
+      } else {
       const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${p}`;
       logEvent("recording_download_started", { caller: callerTail(callerPhone) });
       const audioRes = await fetch(downloadUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -227,7 +265,7 @@ var worker_default = {
         if (silentAudio) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
       } catch (_) {
       }
-      const whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
+      whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
       const formData = new FormData();
       formData.append("file", audioBlob, "recording.wav");
       formData.append("model", "whisper-large-v3-turbo");
@@ -249,7 +287,9 @@ var worker_default = {
         logEvent("transcription_failed", { status: whisperRes.status, code: errorCode });
         return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
       }
-      const transcribedText = (await whisperRes.json()).text?.trim() || "";
+        transcribedText = (await whisperRes.json()).text?.trim() || "";
+      }
+
       const callId = String(params.ApiCallId || requestId || "call_" + callerPhone).slice(0, 90);
       if (callId.startsWith("dbg_") && env.MAILBOX_PATH_SECRET && mailboxAuth === env.MAILBOX_PATH_SECRET) {
         return Response.json({ t: transcribedText, effective: effectiveTextIfAny(transcribedText), caller: callerPhone });
@@ -300,6 +340,22 @@ var worker_default = {
       const clockGlued = transcribedText.replace(/\s+/g, "");
       const clockFast = (/(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(transcribedText) || /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(clockGlued)) && !/(?:מייל|אימייל|צאט|שלח|תשלח|שלוח|תעביר|דולר|אירו|יורו|מזג|ביטקוין|ביקוד|קריפטו)/.test(transcribedText);
       if (clockFast) {
+        const CITY_TZ = { "\u05E0\u05D9\u05D5 \u05D9\u05D5\u05E8\u05E7": "America/New_York", "\u05DC\u05D5\u05E0\u05D3\u05D5\u05DF": "Europe/London", "\u05E4\u05E8\u05D9\u05D6": "Europe/Paris", "\u05D8\u05D5\u05E7\u05D9\u05D5": "Asia/Tokyo", "\u05DC\u05D5\u05E1 \u05D0\u05E0\u05D2\u05DC\u05E1": "America/Los_Angeles", "\u05D1\u05E8\u05DC\u05D9\u05DF": "Europe/Berlin", "\u05DE\u05D5\u05E1\u05E7\u05D1\u05D4": "Europe/Moscow", "\u05D0\u05DE\u05E1\u05D8\u05E8\u05D3\u05DD": "Europe/Amsterdam" };
+        const askedCity = Object.keys(CITY_TZ).find((c) => transcribedText.includes(c));
+        if (askedCity) {
+          try {
+            const _cn = new Date();
+            const _ct = _cn.toLocaleTimeString("he-IL", { timeZone: CITY_TZ[askedCity], hour: "2-digit", minute: "2-digit", hour12: false });
+            const _numH = parseInt(_ct.split(":")[0], 10), _numM = parseInt(_ct.split(":")[1], 10);
+            return textResponse("id_list_message=t-\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 \u05D1" + askedCity + " " + hebNumWords(_numH) + " \u05D5" + hebNumWords(_numM));
+          } catch (_) {
+          }
+        } else {
+          const foreignCityHint = /\u05D1\u05D4\u05E8\u05D9\u05D5\u05D7|\u05D1\u05E2\u05D9\u05E8|\u05D1\u05DE\u05D3\u05D9\u05E0\u05D4/.test(transcribedText);
+          if (foreignCityHint && !/\u05D9\u05E9\u05E8\u05D0\u05DC|\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD|\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1|\u05D7\u05D9\u05E4\u05D4|\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2|\u05D0\u05D9\u05DC\u05EA|\u05E0\u05EA\u05E0\u05D9\u05D4/.test(transcribedText)) {
+            return textResponse("id_list_message=t-\u05D0\u05E0\u05D9 \u05DE\u05DB\u05D9\u05E8 \u05E9\u05E2\u05D4 \u05D1\u05D9\u05E9\u05E8\u05D0\u05DC \u05D5\u05D1\u05DB\u05DE\u05D4 \u05E2\u05E8\u05D9\u05DD \u05D2\u05D3\u05D5\u05DC\u05D5\u05EA \u05DB\u05DE\u05D5 \u05E0\u05D9\u05D5 \u05D9\u05D5\u05E8\u05E7 \u05D5\u05DC\u05D5\u05E0\u05D3\u05D5\u05DF");
+          }
+        }
         const _now = /* @__PURE__ */ new Date();
         const _t = _now.toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", hour12: false });
         const _d = _now.toLocaleDateString("he-IL", { timeZone: "Asia/Jerusalem", weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -377,11 +433,17 @@ var worker_default = {
         dollarRate = await currentDollarRate();
         usdRateStr = `\u05D3\u05D5\u05DC\u05E8: ${dollarRate.rate} \u20AA, \u05DC\u05E4\u05D9 \u05D4\u05E9\u05E2\u05E8 \u05D4\u05D9\u05E6\u05D9\u05D2 \u05D4\u05D0\u05D7\u05E8\u05D5\u05DF \u05E9\u05DC \u05D1\u05E0\u05E7 \u05D9\u05E9\u05E8\u05D0\u05DC`;
         try {
-          const wres = await fetch("https://api.open-meteo.com/v1/forecast?latitude=32.08&longitude=34.78&current=temperature_2m,weather_code&timezone=Asia%2FJerusalem", { headers: { "User-Agent": "Mozilla/5.0" } });
+          const CITIES = { "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD": [31.78, 35.22], "\u05D7\u05D9\u05E4\u05D4": [32.79, 34.99], "\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2": [31.25, 34.79], "\u05D0\u05D9\u05DC\u05EA": [29.55, 34.95], "\u05E0\u05EA\u05E0\u05D9\u05D4": [32.33, 34.86], "\u05E4\u05EA\u05D7 \u05EA\u05E7\u05D5\u05D5\u05D4": [32.09, 34.89], "\u05D0\u05E9\u05D3\u05D5\u05D3": [31.8, 34.65], "\u05E6\u05E4\u05EA": [32.96, 35.5], "\u05D8\u05D1\u05E8\u05D9\u05D4": [32.79, 35.53], "\u05E8\u05D7\u05D5\u05D1\u05D5\u05EA": [31.9, 34.9] };
+          let weatherCity = "\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1";
+          let wLat = 32.08, wLon = 34.78;
+          for (const [city, coords] of Object.entries(CITIES)) {
+            if (transcribedText.includes(city)) { weatherCity = city; wLat = coords[0]; wLon = coords[1]; break; }
+          }
+          const wres = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${wLat}&longitude=${wLon}&current=temperature_2m,weather_code&timezone=Asia%2FJerusalem`, { headers: { "User-Agent": "Mozilla/5.0" } });
           if (wres.ok) {
             const wd = await wres.json();
             const wc = wd.current || {};
-            if (wc.temperature_2m !== void 0) weatherStr = `\u05DE\u05D6\u05D2 \u05D4\u05D0\u05D5\u05D5\u05D9\u05E8 \u05D1\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1: ${wc.temperature_2m} \u05DE\u05E2\u05DC\u05D5\u05EA`;
+            if (wc.temperature_2m !== void 0) weatherStr = `\u05DE\u05D6\u05D2 \u05D4\u05D0\u05D5\u05D5\u05D9\u05E8 \u05D1${weatherCity}: ${wc.temperature_2m} \u05DE\u05E2\u05DC\u05D5\u05EA`;
           }
         } catch (_) {
         }
@@ -405,9 +467,17 @@ var worker_default = {
           const hour = hourMatch ? parseInt(hourMatch[1]) : 8;
           const minute = hourMatch?.[2] ? parseInt(hourMatch[2]) : 0;
           const isTomorrow = transcribedText.includes("\u05DE\u05D7\u05E8");
-          const fireDate = /* @__PURE__ */ new Date();
-          if (isTomorrow) fireDate.setDate(fireDate.getDate() + 1);
-          fireDate.setHours(hour, minute, 0, 0);
+          const nowForRem = /* @__PURE__ */ new Date();
+          const _israelOffsetMs = (d) => {
+            const _dtf = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+            const _p = {};
+            for (const _x of _dtf.formatToParts(d)) _p[_x.type] = _x.value;
+            return Date.UTC(+_p.year, +_p.month - 1, +_p.day, +_p.hour % 24, +_p.minute, +_p.second) - d.getTime();
+          };
+          const _ilP = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(nowForRem).reduce((acc, x) => (acc[x.type] = x.value, acc), {});
+          let fireDate = new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day + (isTomorrow ? 1 : 0), hour, minute, 0) - _israelOffsetMs(new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day, hour, minute, 0))));
+          fireDate = new Date(fireDate.getTime() - _israelOffsetMs(fireDate) + _israelOffsetMs(new Date(fireDate.getTime() - _israelOffsetMs(fireDate))));
+          if (!isTomorrow && fireDate.getTime() <= nowForRem.getTime() + 6e4) fireDate = new Date(fireDate.getTime() + 864e5);
           const message = transcribedText.replace(/תזכיר(י)? לי (מחר )?(ב-?\d{1,2}(:\d{2})?)?/g, "").trim() || "\u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05DE\u05DE\u05E2\u05E8\u05DB\u05EA \u05D4-AI";
           await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
           liveContext = `\u05E0\u05E9\u05DE\u05E8\u05D4 \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05E7\u05D5\u05DC\u05D9\u05EA \u05D0\u05D9\u05E9\u05D9\u05EA \u05E2\u05D1\u05D5\u05E8 \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 ${callerPhone} \u05D1\u05E9\u05E2\u05D4 ${hour}:${minute < 10 ? "0" + minute : minute}${isTomorrow ? " \u05DE\u05D7\u05E8" : " \u05D4\u05D9\u05D5\u05DD"}: "${message}"`;
@@ -546,7 +616,7 @@ var worker_default = {
       await saveConvoTurn(env, transcribedText, cleanAnswer);
       return textResponse(`id_list_message=t-${cleanAnswer}`);
     } catch (err) {
-      logEvent("system_error", { type: err?.name || "Error" });
+      logEvent("system_error", { type: err?.name || "Error", msg: String(err?.message || "").slice(0, 120), stack: String(err?.stack || "").slice(0, 300) });
       return textResponse("id_list_message=t-\u05DE\u05E9\u05D4\u05D5 \u05D1\u05EA\u05E9\u05D5\u05D1\u05D4 \u05D4\u05E9\u05EA\u05D1\u05E9, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
     }
   }
