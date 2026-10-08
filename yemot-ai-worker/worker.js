@@ -138,6 +138,23 @@ var worker_default = {
     }
     const callerPhone = params.ApiPhone || params.phone || params.Phone || "";
     const mailboxAuth = url.pathname.startsWith("/ivr/") ? url.pathname.slice(5) : "";
+    if (url.pathname.startsWith("/dbg/") && (request.method === "GET" || request.method === "POST")) {
+      if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
+      const k = url.searchParams.get("k") || "";
+      if (!k) return Response.json({ error: "missing k" });
+      const v = url.searchParams.get("v");
+      if (v !== null && request.method === "POST") {
+        let parsed;
+        try { parsed = JSON.parse(v); } catch (_) { return Response.json({ error: "bad json" }); }
+        await env.USER_MEMORY.put(k, JSON.stringify(parsed));
+        if (/^chat_contacts_/.test(k)) await doStateFetch(env, k, "PUT", parsed);
+        return Response.json({ ok: true, key: k });
+      }
+      const doVal = await doStateFetch(env, k, "GET");
+      let kvVal = null;
+      try { kvVal = await env.USER_MEMORY.get(k); } catch (_) {}
+      return Response.json({ key: k, do: doVal?.value ?? null, kv: kvVal ? JSON.parse(kvVal) : null });
+    }
     if (params.confirm !== void 0 && callerPhone) {
       if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
       return await handleConfirm(env, params.confirm, callerPhone);
@@ -233,11 +250,14 @@ var worker_default = {
         return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
       }
       const transcribedText = (await whisperRes.json()).text?.trim() || "";
-      if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
       const callId = String(params.ApiCallId || requestId || "call_" + callerPhone).slice(0, 90);
+      if (callId.startsWith("dbg_") && env.MAILBOX_PATH_SECRET && mailboxAuth === env.MAILBOX_PATH_SECRET) {
+        return Response.json({ t: transcribedText, effective: effectiveTextIfAny(transcribedText), caller: callerPhone });
+      }
+      if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
       globalThis.__callId = callId;
       const cont = await kvGetList(env, contStateKey(callerPhone));
-      if (cont && cont.kind && Date.now() - (cont.ts || 0) < 600000) {
+      if (cont && cont.kind && Date.now() - (cont.ts || 0) < (cont.kind === "currency" ? 180000 : 600000)) {
         const contRes = resolveContinuation(cont, transcribedText, whisperContacts);
         logEvent("cont_checked", { kind: String(cont.kind || "").slice(0, 10), result: String(contRes.status).slice(0, 12), caller: callerTail(callerPhone) });
         if (contRes.status === "cancel") {
@@ -251,7 +271,19 @@ var worker_default = {
           }
           return await executeContinuation(env, cont, contRes, callerPhone, requestId);
         }
-        if (contRes.status === "reask") return speak(cont.question || "אנא ענה על השאלה הקודמת");
+        if (contRes.status === "ack") {
+          await clearContState(env, callerPhone);
+          return speak("בכיף, במה עוד אפשר לעזור?");
+        }
+        if (contRes.status === "reask") {
+          const asks = (cont.asks || 0) + 1;
+          if (asks >= 2) {
+            await clearContState(env, callerPhone);
+            return speak("לא הבנתי, במה עוד אפשר לעזור?");
+          }
+          await setContState(env, callerPhone, { ...cont, asks });
+          return speak(cont.question || "אנא ענה על השאלה הקודמת");
+        }
         await clearContState(env, callerPhone);
       }
       let convo = null;
@@ -282,9 +314,21 @@ var worker_default = {
         } catch (_) {
         }
         return speak(localClockText(_t, _d, _hb));
+      const thanksQ = /^(?:תודה(?: רבה)?(?: על הכול)?|יישר כוח|בסדר גמור)(?:\s*[.!ן]\s*)?$/.test(transcribedText.trim());
+      if (thanksQ) {
+        const thA = "בכיף, במה עוד אפשר לעזור?";
+        await saveConvoTurn(env, transcribedText, thA);
+        return speak(thA);
+      }
+      const capsQ = /(?:מה אתה יכול|מה אפשר לעשות|אילו פעולות|מה היכולות|מה אתה עושה|מה אתה מציע)/.test(transcribedText);
+      if (capsQ) {
+        const capsA = "אני יכול לומר לך את השעה והתאריך, מזג אוויר, שערי דולר אירו וביטקוין, לקרוא מיילים והודעות צאט, לשלוח מייל והודעות, לספר בדיחה ולענות על שאלות כלליות. פשוט תגיד מה צריך";
+        await saveConvoTurn(env, transcribedText, capsA);
+        return speak(capsA);
+      }
       }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
-      const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)|(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])(?:ב)?(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
+      const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)|(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])[בהל]?(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
       const emailIntent = /(?:מייל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
       const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
@@ -390,10 +434,23 @@ var worker_default = {
       const euroQ = asksEuroRate(effectiveText);
       const currOnlyQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05E1[\u05D9]?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2)/.test(effectiveText) && !asksDollarRate(effectiveText) && !euroQ;
       if (currOnlyQ) {
-        const currQuestion = "לאיזה מטבע אתה מתכוון? דולר, אירו או ביטקוין";
-        await setContState(env, callerPhone, { kind: "currency", action: "rate", payload: {}, originalRequest: transcribedText, question: currQuestion, ts: Date.now() });
-        await saveConvoTurn(env, transcribedText, currQuestion);
-        return speak(currQuestion);
+        const parts = [];
+        if (dollarRate && Number.isFinite(dollarRate.rate)) {
+          const dSh = Math.floor(dollarRate.rate);
+          const dAg = Math.round((dollarRate.rate - dSh) * 100);
+          parts.push("שער הדולר " + dSh + " שקלים ו" + dAg + " אגורות");
+        }
+        const eurAll = await currentEuroRate();
+        if (eurAll) {
+          const eSh = Math.floor(eurAll);
+          const eAg = Math.round((eurAll - eSh) * 100);
+          parts.push("שער האירו " + eSh + " שקלים ו" + eAg + " אגורות");
+        }
+        if (parts.length) {
+          const ans = parts.join(", ");
+          await saveConvoTurn(env, transcribedText, ans);
+          return speak(ans);
+        }
       }
       if (euroQ) {
         const eurRate = await currentEuroRate();
@@ -413,7 +470,7 @@ var worker_default = {
         logEvent("dollar_rate_answered", { source: "bank_of_israel" });
         return speak(`\u05D4\u05E9\u05E2\u05E8 \u05D4\u05D9\u05E6\u05D9\u05D2 \u05D4\u05D0\u05D7\u05E8\u05D5\u05DF \u05E9\u05E4\u05E8\u05E1\u05DD \u05D1\u05E0\u05E7 \u05D9\u05E9\u05E8\u05D0\u05DC \u05D4\u05D5\u05D0 ${amount} \u05DC\u05D3\u05D5\u05DC\u05E8`);
       }
-      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9. \u05EA\u05E9\u05D5\u05D1\u05D4 \u05DE\u05E7\u05E1\u05D9\u05DE\u05DC\u05D9\u05EA 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD. \u05D0\u05DC \u05EA\u05D0\u05E8\u05D9\u05DA. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4 \u05D9\u05E9\u05D9\u05E8\u05D5\u05EA. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA. \u05E2\u05E0\u05D4 \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4 \u05D5\u05D1\u05E8\u05D5\u05E8\u05D4. \u05D0\u05DC \u05EA\u05E9\u05EA\u05DE\u05E9 \u05D1\u05D0\u05E0\u05D2\u05DC\u05D9\u05EA.
+      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9, \u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD, \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4, \u05D1\u05DC\u05D9 \u05D0\u05E0\u05D2\u05DC\u05D9\u05EA. \u05D9\u05DB\u05D5\u05DC\u05D5\u05EA \u05D4\u05DE\u05E2\u05E8\u05DB\u05EA: \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D9\u05E8\u05D5 \u05D5\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF, \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA \u05D5\u05E9\u05D0\u05DC\u05D5\u05EA \u05DB\u05DC\u05DC\u05D9\u05D5\u05EA. \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05E9\u05D0\u05D9\u05E0\u05DA \u05D9\u05DB\u05D5\u05DC \u05DC\u05D2\u05E9\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05DC\u05E6\u05D0\u05D8\u05D9\u05DD, \u05D6\u05D4 \u05E7\u05D9\u05D9\u05DD \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA. \u05D0\u05DD \u05D4\u05DE\u05E9\u05E4\u05D8 \u05DE\u05D1\u05D5\u05DC\u05D1\u05DC, \u05D7\u05E1\u05E8 \u05DE\u05D9\u05D3\u05E2 \u05D0\u05D5 \u05E0\u05E9\u05DE\u05E2 \u05DB\u05DE\u05D5 \u05D8\u05E2\u05D5\u05EA \u05EA\u05DE\u05DC\u05D5\u05DC \u05DE\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05E0\u05D9, \u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05EA\u05E9\u05D5\u05D1\u05D4, \u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05E9\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA \u05D5\u05D1\u05E7\u05E9 \u05E9\u05D9\u05D7\u05D6\u05D5\u05E8 \u05E2\u05DC \u05D4\u05D1\u05E7\u05E9\u05D4. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA.
 \u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 ${currentTimeIsrael}, \u05D4\u05EA\u05D0\u05E8\u05D9\u05DA ${currentDateIsrael}${hebrewDateStr ? ", " + hebrewDateStr : ""}${parashaStr ? ", " + parashaStr : ""}${usdRateStr ? ". \u05E9\u05E2\u05E8\u05D9 \u05D7\u05DC\u05D9\u05E4\u05D9\u05DF: " + usdRateStr : ""}${weatherStr ? ", " + weatherStr : ""}${btcStr ? ", " + btcStr : ""}${callerName ? ". \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 \u05E0\u05E7\u05E8\u05D0 " + callerName : ""}${liveContext ? ". \u05DE\u05D9\u05D3\u05E2 \u05E0\u05D5\u05E1\u05E3: " + liveContext : ""}`;
       const convoCtx = convo && convo.lastUser ? "\u05D1\u05D4\u05DE\u05E9\u05DA \u05DC\u05E9\u05D9\u05D7\u05EA\u05E0\u05D5: \u05E9\u05D0\u05DC\u05EA\u05D9 \u05E7\u05D5\u05D3\u05DD: " + String(convo.lastUser).slice(0, 150) + ", \u05D5\u05E2\u05E0\u05D9\u05EA \u05DC\u05D9: " + String(convo.lastAnswer || "").slice(0, 150) + ". \u05D4\u05D4\u05E9\u05DC\u05D4 \u05D4\u05E0\u05D5\u05DB\u05D7\u05D9\u05EA \u05DE\u05EA\u05D9\u05D7\u05E1\u05EA \u05D0\u05DC\u05D9\u05D4. " : "";
       const useWebSearch = needsWebSearch(effectiveText);
@@ -757,6 +814,10 @@ function resolveContinuation(cont, reply, allContacts) {
   if (cont.kind === "currency") {
     const cur = findCurrency(text);
     if (cur) return { status: "resolved", currency: cur };
+    const ackQ = /^(?:תודה|בסדר|אוקיי|כן|לא|סבבה|יפה|כלום|אין כלום)(?:\s|$)/.test(text.trim()) && words <= 2;
+    if (ackQ) return { status: "ack" };
+    const lifeQ = /(?:מזג|בדיחה|לעזור|יכול לעשות|מה אתה|מייל|צאט|שלח|תשלח)/.test(text);
+    if (words >= 4 || lifeQ) return { status: "newcommand" };
   }
   if (cont.kind === "contact") {
     const among = matchCandidatesAmong(cont.candidates || [], text);
@@ -880,7 +941,7 @@ __name(executeContinuation, "executeContinuation");
 __name2(executeContinuation, "executeContinuation");
 __name22(executeContinuation, "executeContinuation");
 function buildWhisperPrompt(contacts) {
-  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, שעה, תאריך, דולר, אירו, שטרודל, נקודה, מייל, צאט.";
+  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, שעה, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה.";
   const names = [];
   for (const c of contacts || []) {
     const n = String(c && c.name || "").trim();
@@ -907,6 +968,17 @@ function findContactMatches(contacts, requestedName) {
       return n.length >= 2 && (n.includes(wanted) || (wanted.length >= 3 && wanted.includes(n)));
     }));
     if (sub.length) return sub;
+  }
+  const rawToks = String(requestedName || "").split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3);
+  const tokSet = new Set();
+  for (const t of rawToks) {
+    tokSet.add(normalizeContactTerm(t));
+    if (t.length >= 4) tokSet.add(normalizeContactTerm(t.slice(1)));
+  }
+  for (const tk of tokSet) {
+    if (tk.length < 3) continue;
+    const word = contacts.filter((contact) => [contact.name, ...contact.aliases || []].some((value) => normalizeContactTerm(value).includes(tk)));
+    if (word.length) return word;
   }
   return [];
 }
@@ -1142,7 +1214,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("אין הרשאה לגישה למייל ממספר זה");
     }
-    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
+    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
@@ -1275,7 +1347,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
-    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread רק כשהבקשה היא לקרוא או לחפש הודעות שהתקבלו. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.`;
+    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread רק כשהבקשה היא לקרוא או לחפש הודעות שהתקבלו. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
@@ -1352,7 +1424,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
               if (addrGuess.includes("@") && addrGuess.split("@")[1]?.includes(".")) {
                 to = addrGuess;
               } else {
-                return speak("\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D4\u05D6\u05D4. \u05DB\u05D3\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D0\u05DE\u05D5\u05E8, \u05D1\u05E6\u05D0\u05D8 \u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05E9\u05DD, \u05DB\u05EA\u05D5\u05D1\u05EA \u05DE\u05D9\u05D9\u05DC \u05D5\u05DB\u05D9\u05E0\u05D5\u05D9");
+                return speak("לא מצאתי איש קשר בשם הזה. אמור שוב את השם, או אמור את כתובת המייל שלו כולל שטרודל ונקודה");
               }
             }
           }
@@ -1370,6 +1442,11 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
 __name(handleGoogleChat, "handleGoogleChat");
 __name2(handleGoogleChat, "handleGoogleChat");
 __name22(handleGoogleChat, "handleGoogleChat");
+function effectiveTextIfAny(t) {
+  return String(t || "").replace(/[\u05B0-\u05C7]/g, "").replace(/\s+/g, " ").trim();
+}
+__name(effectiveTextIfAny, "effectiveTextIfAny");
+__name2(effectiveTextIfAny, "effectiveTextIfAny");
 function speak(text) {
   const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
   if (!clean) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
