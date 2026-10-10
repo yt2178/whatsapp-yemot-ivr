@@ -137,7 +137,7 @@ var worker_default = {
             if (!r.notified && r.fireAt && Date.now() >= new Date(r.fireAt).getTime()) {
               if (YEMOT_TOKEN_S) {
                 try {
-                  const tz = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?token=${YEMOT_TOKEN_S}&phones=tzl:${phone}`);
+                  const tz = await fetch(`https://www.call2all.co.il/ym/api/RunTzintuk?token=${YEMOT_TOKEN_S}&phones=tzl:yt2178whatsapp`);
                   logEvent("reminder_tzintuk_sent", { caller: callerTail(phone), status: tz.status });
                 } catch (_) {
                 }
