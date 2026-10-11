@@ -163,7 +163,7 @@ async function ttsTextToYemotFile(env, text) {
     const upData = await upRes.json().catch(() => null);
     if (upData && upData.responseStatus === "OK") {
       logEvent("tts_file_uploaded", { ms: Date.now(), size: total });
-      return "ivr2:9/r/" + fname;
+      return "/9/r/" + fname.replace(/\.wav$/, "");
     }
     logEvent("tts_upload_failed", { status: upData?.responseStatus || "err" });
     return null;
