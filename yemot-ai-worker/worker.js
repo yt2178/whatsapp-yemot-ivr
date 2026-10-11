@@ -493,7 +493,7 @@ var worker_default = {
       }
       const capsQ = /(?:מה אתה יכול|מה אפשר לעשות|אילו פעולות|מה היכולות|מה אתה עושה|מה אתה מציע)/.test(transcribedText);
       if (capsQ) {
-        const capsA = "אני יכול לומר לך את השעה והתאריך, מזג אוויר, שערי דולר אירו וביטקוין, לקרוא מיילים והודעות צאט, לשלוח מייל והודעות, לספר בדיחה ולענות על שאלות כלליות. פשוט תגיד מה צריך";
+        const capsA = "אני יכול לומר לך את השעה והתאריך, מזג אוויר, שערי דולר אירו וביטקוין, לקרוא מיילים והודעות צאט, לשלוח מייל והודעות, להגדיר תזכורות, לספר בדיחה ולענות על שאלות כלליות. פשוט תגיד מה צריך";
         await saveConvoTurn(env, transcribedText, capsA);
         return speak(capsA);
       }
@@ -576,10 +576,29 @@ var worker_default = {
           if (btcUsd && !isNaN(btcUsd)) btcStr = `\u05DE\u05D7\u05D9\u05E8 \u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF \u05DB\u05E8\u05D2\u05E2: ${Math.round(btcUsd).toLocaleString("en-US")} \u05D3\u05D5\u05DC\u05E8`;
         } catch (_) {
         }
-        const isReminder = transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05E8") || transcribedText.includes("\u05EA\u05D6\u05DB\u05D9\u05E8\u05D9");
+        const isReminder = /(?:ת[י]?זכ[ירו]|הזכ[רי]|אזכור)/.test(transcribedText);
         if (isReminder && callerPhone && env.USER_MEMORY) {
-          const hourMatch = transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
+          const relM = transcribedText.match(/בעוד\s+(?:(\d{1,3})\s*(דקות|דקה|שעות|שעה)|חצי שעה|שעה|שעתיים)/);
+          if (relM) {
+            let _ms = 36e5;
+            if (relM[1]) {
+              const _n = parseInt(relM[1]);
+              _ms = relM[2].startsWith("דק") ? _n * 6e4 : _n * 36e5;
+            } else if (relM[0].includes("חצי")) _ms = 18e5;
+            else if (relM[0].includes("שעתיים")) _ms = 72e5;
+            const relFire = new Date(Date.now() + _ms);
+            const relMsg = transcribedText
+              .replace(/(?:ת[י]?זכ(?:יר|ורת|ורות|ר)|הזכר(?:ת)?|אזכור)(?:\s+לי)?/g, " ")
+              .replace(/בעוד (?:חצי שעה|שעתיים)|בעוד\s+[^\s]+/g, " ")
+              .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי|בבקשה)(?=\s|$)/g, " ")
+              .replace(/\s+/g, " ").trim() || "תזכורת ממערכת ה-AI";
+            await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: relFire.toISOString(), message: relMsg }), { expirationTtl: 86400 });
+            liveContext = `נשמרה תזכורת קולית אישית עבור המתקשר ${callerPhone} בשעה ${relFire.toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", hour12: false })}: "${relMsg}"`;
+          }
+          const hourMatch = !relM && transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
           const _rt = transcribedText;
+          if (relM) { /* זמן יחסי כבר נשמר למעלה */ }
+          else {
           const _B = "(?:^|(?<=[\u05D1\u05DC])|[^\u05D0-\u05EA0-9])";
           const _E = "(?:$|[^\u05D0-\u05EA0-9])";
           let hour = hourMatch ? parseInt(hourMatch[1]) : null;
@@ -624,10 +643,18 @@ var worker_default = {
           let fireDate = new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day + (isTomorrow ? 1 : 0), hour, minute, 0) - _israelOffsetMs(new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day, hour, minute, 0))));
           fireDate = new Date(fireDate.getTime() - _israelOffsetMs(fireDate) + _israelOffsetMs(new Date(fireDate.getTime() - _israelOffsetMs(fireDate))));
           if (!isTomorrow && fireDate.getTime() <= nowForRem.getTime() + 6e4) fireDate = new Date(fireDate.getTime() + 864e5);
-          const message = transcribedText.replace(/תזכיר(י)? לי (מחר )?(ב-?\d{1,2}(:\d{2})?)?/g, "").trim() || "\u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05DE\u05DE\u05E2\u05E8\u05DB\u05EA \u05D4-AI";
+          const message = transcribedText
+            .replace(/(?:ת[י]?זכ(?:יר|ורת|ורות|ר)|הזכר(?:ת)?|אזכור)(?:\s+לי)?/g, " ")
+            .replace(/(?:בבוקר|בצהריים|בערב|בלילה|בשעה|מחר|היום|להגדיר|הגד|הגדר|שים|קח|בבקשה)/g, " ")
+            .replace(/ב(?:אחת|אחד|שתיים|שתיים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|אחת עשרה|שתים עשרה|שתים עשרה)/g, " ")
+            .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי)(?=\s|$)/g, " ")
+            .replace(/(?:^|\s)(?:אחת|אחד|שתיים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|אחת עשרה|שתים עשרה|שתים עשרה)(?=\s|$)/g, " ")
+            .replace(/ב-?\d{1,2}(?::\d{2})?/g, " ")
+            .replace(/\s+/g, " ").trim() || "\u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05DE\u05DE\u05E2\u05E8\u05DB\u05EA \u05D4-AI";
           await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
           liveContext = `\u05E0\u05E9\u05DE\u05E8\u05D4 \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05E7\u05D5\u05DC\u05D9\u05EA \u05D0\u05D9\u05E9\u05D9\u05EA \u05E2\u05D1\u05D5\u05E8 \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 ${callerPhone} \u05D1\u05E9\u05E2\u05D4 ${hour}:${minute < 10 ? "0" + minute : minute}${isTomorrow ? " \u05DE\u05D7\u05E8" : " \u05D4\u05D9\u05D5\u05DD"}: "${message}"`;
-        }
+      }
+          }
         const nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
         if (nameMatch && callerPhone && env.USER_MEMORY) {
           const newName = nameMatch[1];
@@ -686,7 +713,7 @@ var worker_default = {
         logEvent("dollar_rate_answered", { source: "bank_of_israel" });
         return speak(`\u05D4\u05E9\u05E2\u05E8 \u05D4\u05D9\u05E6\u05D9\u05D2 \u05D4\u05D0\u05D7\u05E8\u05D5\u05DF \u05E9\u05E4\u05E8\u05E1\u05DD \u05D1\u05E0\u05E7 \u05D9\u05E9\u05E8\u05D0\u05DC \u05D4\u05D5\u05D0 ${amount} \u05DC\u05D3\u05D5\u05DC\u05E8`);
       }
-      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9, \u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD, \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4, \u05D1\u05DC\u05D9 \u05D0\u05E0\u05D2\u05DC\u05D9\u05EA. \u05D9\u05DB\u05D5\u05DC\u05D5\u05EA \u05D4\u05DE\u05E2\u05E8\u05DB\u05EA: \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D9\u05E8\u05D5 \u05D5\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF, \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA \u05D5\u05E9\u05D0\u05DC\u05D5\u05EA \u05DB\u05DC\u05DC\u05D9\u05D5\u05EA. \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05E9\u05D0\u05D9\u05E0\u05DA \u05D9\u05DB\u05D5\u05DC \u05DC\u05D2\u05E9\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05DC\u05E6\u05D0\u05D8\u05D9\u05DD, \u05D6\u05D4 \u05E7\u05D9\u05D9\u05DD \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA. \u05D0\u05DD \u05D4\u05DE\u05E9\u05E4\u05D8 \u05DE\u05D1\u05D5\u05DC\u05D1\u05DC, \u05D7\u05E1\u05E8 \u05DE\u05D9\u05D3\u05E2 \u05D0\u05D5 \u05E0\u05E9\u05DE\u05E2 \u05DB\u05DE\u05D5 \u05D8\u05E2\u05D5\u05EA \u05EA\u05DE\u05DC\u05D5\u05DC \u05DE\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05E0\u05D9, \u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05EA\u05E9\u05D5\u05D1\u05D4, \u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05E9\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA \u05D5\u05D1\u05E7\u05E9 \u05E9\u05D9\u05D7\u05D6\u05D5\u05E8 \u05E2\u05DC \u05D4\u05D1\u05E7\u05E9\u05D4. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA.
+      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9, \u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD, \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4, \u05D1\u05DC\u05D9 \u05D0\u05E0\u05D2\u05DC\u05D9\u05EA. \u05D9\u05DB\u05D5\u05DC\u05D5\u05EA \u05D4\u05DE\u05E2\u05E8\u05DB\u05EA: \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D9\u05E8\u05D5 \u05D5\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF, \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8, \u05D4\u05D2\u05D3\u05E8\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA \u05D5\u05E9\u05D0\u05DC\u05D5\u05EA \u05DB\u05DC\u05DC\u05D9\u05D5\u05EA. \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05E9\u05D0\u05D9\u05E0\u05DA \u05D9\u05DB\u05D5\u05DC \u05DC\u05D2\u05E9\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05DC\u05E6\u05D0\u05D8\u05D9\u05DD, \u05D6\u05D4 \u05E7\u05D9\u05D9\u05DD \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA. \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA \u05E0\u05E9\u05DE\u05E8\u05D5\u05EA \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DB\u05E9\u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05D5\u05DC\u05DC\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05D0\u05D5 \u05EA\u05D6\u05DB\u05D9\u05E8 - \u05D0\u05DD \u05D4\u05D1\u05E7\u05E9\u05D4 \u05D4\u05D2\u05D9\u05E2\u05D4 \u05D0\u05DC\u05D9\u05DA \u05E1\u05D9\u05DE\u05DF \u05E9\u05DC\u05D0 \u05E0\u05E9\u05DE\u05E8\u05D4, \u05D1\u05E7\u05E9 \u05DE\u05D4\u05DE\u05E9\u05EA\u05DE\u05E9 \u05DC\u05D5\u05DE\u05E8 \u05EA\u05D6\u05DB\u05D9\u05E8 \u05DC\u05D9 \u05D5\u05D0\u05D6 \u05D0\u05EA \u05D4\u05E9\u05E2\u05D4. \u05D0\u05DD \u05D4\u05DE\u05E9\u05E4\u05D8 \u05DE\u05D1\u05D5\u05DC\u05D1\u05DC, \u05D7\u05E1\u05E8 \u05DE\u05D9\u05D3\u05E2 \u05D0\u05D5 \u05E0\u05E9\u05DE\u05E2 \u05DB\u05DE\u05D5 \u05D8\u05E2\u05D5\u05EA \u05EA\u05DE\u05DC\u05D5\u05DC \u05DE\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05E0\u05D9, \u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05EA\u05E9\u05D5\u05D1\u05D4, \u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05E9\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA \u05D5\u05D1\u05E7\u05E9 \u05E9\u05D9\u05D7\u05D6\u05D5\u05E8 \u05E2\u05DC \u05D4\u05D1\u05E7\u05E9\u05D4. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA.
 \u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 ${currentTimeIsrael}, \u05D4\u05EA\u05D0\u05E8\u05D9\u05DA ${currentDateIsrael}${hebrewDateStr ? ", " + hebrewDateStr : ""}${parashaStr ? ", " + parashaStr : ""}${usdRateStr ? ". \u05E9\u05E2\u05E8\u05D9 \u05D7\u05DC\u05D9\u05E4\u05D9\u05DF: " + usdRateStr : ""}${weatherStr ? ", " + weatherStr : ""}${btcStr ? ", " + btcStr : ""}${callerName ? ". \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 \u05E0\u05E7\u05E8\u05D0 " + callerName : ""}${liveContext ? ". \u05DE\u05D9\u05D3\u05E2 \u05E0\u05D5\u05E1\u05E3: " + liveContext : ""}`;
       const convoCtx = convo && convo.lastUser ? "\u05D1\u05D4\u05DE\u05E9\u05DA \u05DC\u05E9\u05D9\u05D7\u05EA\u05E0\u05D5: \u05E9\u05D0\u05DC\u05EA\u05D9 \u05E7\u05D5\u05D3\u05DD: " + String(convo.lastUser).slice(0, 150) + ", \u05D5\u05E2\u05E0\u05D9\u05EA \u05DC\u05D9: " + String(convo.lastAnswer || "").slice(0, 150) + ". \u05D4\u05D4\u05E9\u05DC\u05D4 \u05D4\u05E0\u05D5\u05DB\u05D7\u05D9\u05EA \u05DE\u05EA\u05D9\u05D7\u05E1\u05EA \u05D0\u05DC\u05D9\u05D4. " : "";
       const useWebSearch = needsWebSearch(effectiveText);
@@ -1157,7 +1184,7 @@ __name(executeContinuation, "executeContinuation");
 __name2(executeContinuation, "executeContinuation");
 __name22(executeContinuation, "executeContinuation");
 function buildWhisperPrompt(contacts) {
-  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, שעה, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה.";
+  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, תזכורת, שעה, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה.";
   const names = [];
   for (const c of contacts || []) {
     const n = String(c && c.name || "").trim();
