@@ -1185,7 +1185,7 @@ __name(executeContinuation, "executeContinuation");
 __name2(executeContinuation, "executeContinuation");
 __name22(executeContinuation, "executeContinuation");
 function buildWhisperPrompt(contacts) {
-  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר, תזכורת, שעה, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה.";
+  let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר לי, תזכירי, תזכורת, תזכורות, הזכר לי, ורבע, וחצי, דקות, שעה, בבוקר, בצהריים, בערב, בלילה, מחר, בעוד, צינטוק, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה, ספר לי.";
   const names = [];
   for (const c of contacts || []) {
     const n = String(c && c.name || "").trim();
