@@ -405,6 +405,7 @@ var worker_default = {
         transcribedText = (await whisperRes.json()).text?.trim() || "";
       }
 
+      transcribedText = await correctTranscription(transcribedText);
       const callId = String(params.ApiCallId || requestId || "call_" + callerPhone).slice(0, 90);
       if (callId.startsWith("dbg_") && env.MAILBOX_PATH_SECRET && mailboxAuth === env.MAILBOX_PATH_SECRET) {
         return Response.json({ t: transcribedText, effective: effectiveTextIfAny(transcribedText), caller: callerPhone });
@@ -1184,6 +1185,30 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
 __name(executeContinuation, "executeContinuation");
 __name2(executeContinuation, "executeContinuation");
 __name22(executeContinuation, "executeContinuation");
+async function correctTranscription(text) {
+  const orig = (text || "").trim();
+  if (!orig || orig.length > 300) return orig;
+  const SYS = "\u05D0\u05EA\u05D4 \u05DE\u05EA\u05E7\u05D9\u05DF \u05D8\u05E7\u05E1\u05D8 \u05E2\u05D1\u05E8\u05D9 \u05E9\u05EA\u05D5\u05DE\u05DC\u05DC \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DE\u05D4\u05E7\u05DC\u05D8\u05EA \u05D8\u05DC\u05E4\u05D5\u05DF \u05D1\u05E7\u05D5 \u05E2\u05D5\u05D6\u05E8 \u05D0\u05D9\u05E9\u05D9. \u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5: \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05DE\u05D8\u05D1\u05E2\u05D5\u05EA, \u05DE\u05D9\u05D9\u05DC \u05D5\u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA. \u05EA\u05E7\u05DF \u05D0\u05DA \u05D5\u05E8\u05E7 \u05E9\u05D9\u05D1\u05D5\u05E9\u05D9 \u05EA\u05DE\u05DC\u05D5\u05DC \u05D1\u05E8\u05D5\u05E8\u05D9\u05DD: \u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05DE\u05EA\u05D7\u05DC\u05E4\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA (\u05D6/\u05E1, \u05D8/\u05EA, \u05DB/\u05D7, \u05D3/\u05D6) \u05D0\u05D5 \u05DE\u05D9\u05DC\u05D4 \u05DC\u05D0 \u05E7\u05D9\u05D9\u05DE\u05EA \u05E9\u05D4\u05D2\u05D9\u05D9\u05EA\u05D4 \u05D3\u05D5\u05DE\u05D4 \u05DC\u05DE\u05D9\u05DC\u05D4 \u05E7\u05D9\u05D9\u05DE\u05EA \u05DE\u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5. \u05D3\u05D5\u05D2\u05DE\u05D0\u05D5\u05EA: \"תסכיר לי\" \u2192 \"תזכיר לי\". \"תסכורת\" \u2192 \"תזכורת\". \u05DB\u05DC\u05DC\u05D9 \u05D1\u05E8\u05D6\u05DC: 1. \u05D0\u05DC \u05EA\u05E9\u05E0\u05D4 \u05DE\u05D9\u05DC\u05D9\u05DD \u05EA\u05E7\u05D9\u05E0\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D2\u05DD \u05D0\u05DD \u05E0\u05E8\u05D0\u05D5\u05EA \u05DE\u05D5\u05D6\u05E8\u05D5\u05EA \u05DC\u05DA. 2. \u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3, \u05D0\u05DC \u05EA\u05E9\u05DE\u05D8\u05D5 \u05D0\u05DC \u05EA\u05D7\u05DC\u05D9\u05E3 \u05DE\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05E9\u05DE\u05D5\u05EA. 3. \u05D0\u05DD \u05D0\u05D9\u05E0\u05DA \u05D1\u05D8\u05D5\u05D7 \u05E9\u05D9\u05E9 \u05E9\u05D9\u05D1\u05D5\u05E1 - \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9 \u05DE\u05D9\u05DC\u05D4 \u05D1\u05DE\u05D9\u05DC\u05D4. 4. \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05EA\u05D5\u05E7\u05DF, \u05D1\u05DC\u05D9 \u05E0\u05E7\u05D5\u05D3\u05EA\u05D9\u05D9\u05DD, \u05D4\u05E2\u05E8\u05D5\u05EA \u05D0\u05D5 \u05D4\u05E1\u05D1\u05D9\u05E8\u05D9\u05DD.";
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "qwen/qwen3.8-27b", temperature: 0, max_tokens: 120, messages: [{ role: "system", content: SYS }, { role: "user", content: orig }] }),
+      signal: ctrl.signal
+    });
+    clearTimeout(to);
+    if (!res.ok) return orig;
+    const j = await res.json();
+    let t2 = (j.choices?.[0]?.message?.content || "").trim().replace(/^[\u05D4\u05D8\u05E7\u05E1\u05D8\u05D4\u05DE\u05E7\u05D5\u05E8\u05D9:]+\s*/, "").replace(/["']/g, "").trim();
+    if (!t2 || t2.length > orig.length * 1.25 + 4 || t2.length < orig.length * 0.75) return orig;
+    const wc1 = orig.split(/\s+/).length, wc2 = t2.split(/\s+/).length;
+    if (Math.abs(wc1 - wc2) > 1) return orig;
+    return t2;
+  } catch (_) { return orig; }
+}
+
 function buildWhisperPrompt(contacts) {
   let p = "שיחה בעברית בקו טלפון. מונחים: תזכיר לי, תזכירי, תזכורת, תזכורות, הזכר לי, ורבע, וחצי, דקות, שעה, בבוקר, בצהריים, בערב, בלילה, מחר, בעוד, צינטוק, תאריך, מזג אוויר, דולר, אירו, ביטקוין, מטבע, שטרודל, נקודה, מייל, צאט, בדיחה, תודה, שלח הודעה, ספר לי.";
   const names = [];
