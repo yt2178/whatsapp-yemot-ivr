@@ -122,6 +122,26 @@ function makePhoneFriendlyTimes(answer) {
 __name(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 __name2(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 var worker_default = {
+  async fetch(request, env, ctx) {
+    const __t0 = Date.now();
+    const __res = await this.fetchInner(request, env, ctx);
+    try {
+      const __url = new URL(request.url);
+      const __phone = __url.searchParams.get("ApiPhone") || "";
+      if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
+        const __ms = Date.now() - __t0;
+        let __body = "";
+        try { __body = (await __res.clone().text()).slice(0, 400); } catch (_) {}
+        const __key = "calllog_" + __phone;
+        let __arr = [];
+        try { __arr = JSON.parse((await env.USER_MEMORY.get(__key)) || "[]") || []; } catch (_) {}
+        __arr.unshift({ at: new Date().toISOString(), ms: __ms, callId: __url.searchParams.get("ApiCallId") || "", body: __body });
+        if (__arr.length > 20) __arr = __arr.slice(0, 20);
+        ctx.waitUntil(env.USER_MEMORY.put(__key, JSON.stringify(__arr), { expirationTtl: 604800 }));
+      }
+    } catch (_) {}
+    return __res;
+  },
   async scheduled(event, env, ctx) {
     try {
       const YEMOT_TOKEN_S = env.YEMOT_TOKEN || "";
@@ -152,7 +172,7 @@ var worker_default = {
     } catch (_) {
     }
   },
-  async fetch(request, env, ctx) {
+  async fetchInner(request, env, ctx) {
     const GROQ_KEY = env.GROQ_KEY || "";
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
     const url = new URL(request.url);
