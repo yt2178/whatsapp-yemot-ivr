@@ -576,62 +576,62 @@ var worker_default = {
           if (btcUsd && !isNaN(btcUsd)) btcStr = `\u05DE\u05D7\u05D9\u05E8 \u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF \u05DB\u05E8\u05D2\u05E2: ${Math.round(btcUsd).toLocaleString("en-US")} \u05D3\u05D5\u05DC\u05E8`;
         } catch (_) {
         }
-        const isReminder = /(?:ת[י]?זכ[ירו]|הזכ[רי]|אזכור)/.test(transcribedText);
+        const isReminder = /(?:ת[י]?[זס]כ[ירו]|ה[זס]כ[רי]|א[זס]כור)/.test(transcribedText);
         if (isReminder && callerPhone && env.USER_MEMORY) {
-          const relM = transcribedText.match(/בעוד\s+(?:(\d{1,3})\s*(דקות|דקה|שעות|שעה)|חצי שעה|שעה|שעתיים)/);
-          if (relM) {
-            let _ms = 36e5;
-            if (relM[1]) {
-              const _n = parseInt(relM[1]);
-              _ms = relM[2].startsWith("דק") ? _n * 6e4 : _n * 36e5;
-            } else if (relM[0].includes("חצי")) _ms = 18e5;
-            else if (relM[0].includes("שעתיים")) _ms = 72e5;
-            const relFire = new Date(Date.now() + _ms);
-            const relMsg = transcribedText
-              .replace(/(?:ת[י]?זכ(?:יר|ורת|ורות|ר)|הזכר(?:ת)?|אזכור)(?:\s+לי)?/g, " ")
-              .replace(/בעוד (?:חצי שעה|שעתיים)|בעוד\s+[^\s]+/g, " ")
-              .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי|בבקשה)(?=\s|$)/g, " ")
-              .replace(/\s+/g, " ").trim() || "תזכורת ממערכת ה-AI";
-            await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: relFire.toISOString(), message: relMsg }), { expirationTtl: 86400 });
-            liveContext = `נשמרה תזכורת קולית אישית עבור המתקשר ${callerPhone} בשעה ${relFire.toLocaleTimeString("he-IL", { timeZone: "Asia/Jerusalem", hour: "2-digit", minute: "2-digit", hour12: false })}: "${relMsg}"`;
+          const _W = (w) => "(?:^|(?<=[\u05D1\u05DC\u05E9])|[^\u05D0-\u05EA0-9])";
+          const _clean = (t) => t.replace(/[.,\s]+$/g, "").replace(/\s+/g, " ").trim() || "תזכורת ממערכת ה-AI";
+          const _stripAll = (t) => _clean(t
+            .replace(/(?:ת[י]?[זס]כ(?:יר[יים]?|ורת|ורות|ר)|ה[זס]כר(?:ת)?|א[זס]כור)(?:\s+לי)?/g, " ")
+            .replace(/(?:^|\s)(?:בבוקר|בצהריים|בערב|בלילה|בשעה|מחר|היום|להגדיר|הגדר|שים|קח|בבקשה|אני רוצה|אני|רוצה|צריך|לי)(?=\s|$)/g, " ")
+            .replace(/(?:^|\s)(?:ב)?(?:אחת עשרה|שתים עשרה|שתיים עשרה|אחת|אחד|שתיים|שתים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר)(?=\s|$)/g, " "));
+          const _NUMW = { "אחת":1,"אחד":1,"שתיים":2,"שתים":2,"שתי":2,"שלוש":3,"שלש":3,"ארבע":4,"חמש":5,"שש":6,"שבע":7,"שמונה":8,"תשע":9,"עשר":10,"חמישה עשר":15,"חמישה":15,"עשרים וחמישה":25,"עשרים":20,"רבעיים":15,"שלושים":30,"ארבעים":40,"חמישים":50 };
+          const _MINW = { ..._NUMW, "רבע":15, "חצי":30 };
+          const _relM = transcribedText.match(/בעוד\s+(?:(\d{1,3}|אחת|אחד|שתיים|שתים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|חמישה עשר|עשרים|שלושים)\s*(דקות|דקה|שעות|שעה)|חצי שעה|שעה|שעתיים)/);
+          if (_relM) {
+            let _mins = 60;
+            if (_relM[1]) {
+              const _n = /^\d/.test(_relM[1]) ? parseInt(_relM[1]) : (_NUMW[_relM[1]] ?? 60);
+              _mins = _relM[2].startsWith("דק") ? _n : _n * 60;
+            } else if (_relM[0].includes("חצי")) _mins = 30;
+            else if (_relM[0].includes("שעתיים")) _mins = 120;
+            const _relFire = new Date(Date.now() + _mins * 6e4);
+            const _relMsg = _clean(transcribedText.replace(_relM[0], " ")
+              .replace(/(?:ת[י]?[זס]כ(?:יר[יים]?|ורת|ורות|ר)|ה[זס]כר(?:ת)?|א[זס]כור)(?:\s+לי)?/g, " ")
+              .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי|בבקשה)(?=\s|$)/g, " "));
+            await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: _relFire.toISOString(), message: _relMsg }), { expirationTtl: 86400 });
+            return speak(`נשמרה תזכורת בעוד ${hebNumWords(_mins)} דקות: ${_relMsg}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
           }
-          const hourMatch = !relM && transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
-          const _rt = transcribedText;
-          if (relM) { /* זמן יחסי כבר נשמר למעלה */ }
-          else {
-          const _B = "(?:^|(?<=[\u05D1\u05DC])|[^\u05D0-\u05EA0-9])";
-          const _E = "(?:$|[^\u05D0-\u05EA0-9])";
-          let hour = hourMatch ? parseInt(hourMatch[1]) : null;
-          if (hour === null && /\u05D1\u05D5\u05E7\u05E8|\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD|\u05E2\u05E8\u05D1|\u05DC\u05D9\u05DC\u05D4|\u05D1\u05E9\u05E2\u05D4/.test(_rt)) {
-            const _hw = [
-              [_B + "(?:\u05D0\u05D7\u05EA|\u05D0\u05D7\u05D3)[ ]?\u05E2\u05E9\u05E8\u05D4?" + _E, 11],
-              [_B + "\u05E9\u05EA(?:\u05D9\u05D9\u05DD|\u05D9\u05DD|\u05D9)[ ]?\u05E2\u05E9\u05E8\u05D4?" + _E, 12],
-              [_B + "\u05E9\u05EA(?:\u05D9\u05D9\u05DD|\u05D9\u05DD|\u05D9)" + _E, 2],
-              [_B + "(?:\u05E9\u05DC\u05D5\u05E9|\u05E9\u05DC\u05E9)" + _E, 3],
-              [_B + "\u05D0\u05E8\u05D1\u05E2" + _E, 4],
-              [_B + "\u05D7\u05DE\u05E9" + _E, 5],
-              [_B + "\u05E9\u05E9\u05D4?" + _E, 6],
-              [_B + "\u05E9\u05D1\u05E2\u05D4?" + _E, 7],
-              [_B + "\u05E9\u05DE\u05D5\u05E0\u05D4" + _E, 8],
-              [_B + "\u05EA\u05E9\u05E2\u05D4?" + _E, 9],
-              [_B + "\u05E2\u05E9\u05E8\u05D4?" + _E, 10],
-              [_B + "(?:\u05D0\u05D7\u05EA|\u05D0\u05D7\u05D3)" + _E, 1]
+          const _hm = transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
+          let hour = _hm ? parseInt(_hm[1]) : null;
+          let minute = _hm?.[2] ? parseInt(_hm[2]) : 0;
+          let _hourEnd = -1;
+          if (hour === null) {
+            const _hwl = [
+              ["אחת עשרה", 11], ["שתים עשרה", 12], ["שתיים עשרה", 12],
+              ["אחת", 1], ["אחד", 1], ["שתיים", 2], ["שתים", 2], ["שתי", 2],
+              ["שלוש", 3], ["שלש", 3], ["ארבע", 4], ["חמש", 5], ["שש", 6],
+              ["שבע", 7], ["שמונה", 8], ["תשע", 9], ["עשר", 10]
             ];
-            for (const _p of _hw) {
-              const _m = new RegExp(_p[0]).exec(_rt);
-              if (_m && !/^\u05D3\u05E7\u05D5\u05EA/.test(_rt.slice(_m.index + _m[0].length).trim())) { hour = _p[1]; break; }
+            for (const [wd, hv] of _hwl) {
+              const _m = new RegExp(_W() + wd + "(?=$|[^\u05D0-\u05EA0-9])").exec(transcribedText);
+              if (_m && !/^דקות/.test(transcribedText.slice(_m.index + _m[0].length).trim())) { hour = hv; _hourEnd = _m.index + _m[0].length; break; }
             }
           }
           if (hour === null) {
-            if (/\u05D1\u05D5\u05E7\u05E8/.test(_rt)) hour = 8;
-            else if (/\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD/.test(_rt)) hour = 12;
-            else if (/\u05E2\u05E8\u05D1/.test(_rt)) hour = 19;
-            else if (/\u05DC\u05D9\u05DC\u05D4/.test(_rt)) hour = 21;
+            if (/בוקר|משך הבוקר/.test(transcribedText)) hour = 8;
+            else if (/צהריים/.test(transcribedText)) hour = 12;
+            else if (/ערב/.test(transcribedText)) hour = 19;
+            else if (/לילה/.test(transcribedText)) hour = 21;
             else hour = 8;
           }
-          if (!hourMatch && /(\u05D1\u05E2\u05E8\u05D1|\u05D1\u05DC\u05D9\u05DC\u05D4)/.test(_rt) && !/\u05D1\u05D1\u05D5\u05E7\u05E8/.test(_rt) && hour < 12) hour += 12;
-          const minute = hourMatch?.[2] ? parseInt(hourMatch[2]) : 0;
-          const isTomorrow = transcribedText.includes("\u05DE\u05D7\u05E8");
+          if (!minute) {
+            let _after = "";
+            if (_hm && !_hm[2]) _after = transcribedText.slice(_hm.index + _hm[0].length, _hm.index + _hm[0].length + 22);
+            else if (_hourEnd > 0) _after = transcribedText.slice(_hourEnd, _hourEnd + 22);
+            const _mn = _after.match(/^[\s,]*ו(רבע|חצי|אחת|אחד|שתיים|שתים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|חמישה עשר|עשרים וחמישה|עשרים|שלושים|ארבעים|חמישים)(?:\s*(?:דקות|דקה))?/);
+            if (_mn) minute = _MINW[_mn[1]] ?? 0;
+          }
+          const isTomorrow = transcribedText.includes("מחר");
           const nowForRem = /* @__PURE__ */ new Date();
           const _israelOffsetMs = (d) => {
             const _dtf = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Jerusalem", hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -643,18 +643,19 @@ var worker_default = {
           let fireDate = new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day + (isTomorrow ? 1 : 0), hour, minute, 0) - _israelOffsetMs(new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day, hour, minute, 0))));
           fireDate = new Date(fireDate.getTime() - _israelOffsetMs(fireDate) + _israelOffsetMs(new Date(fireDate.getTime() - _israelOffsetMs(fireDate))));
           if (!isTomorrow && fireDate.getTime() <= nowForRem.getTime() + 6e4) fireDate = new Date(fireDate.getTime() + 864e5);
-          const message = transcribedText
-            .replace(/(?:ת[י]?זכ(?:יר|ורת|ורות|ר)|הזכר(?:ת)?|אזכור)(?:\s+לי)?/g, " ")
-            .replace(/(?:בבוקר|בצהריים|בערב|בלילה|בשעה|מחר|היום|להגדיר|הגד|הגדר|שים|קח|בבקשה)/g, " ")
-            .replace(/ב(?:אחת|אחד|שתיים|שתיים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|אחת עשרה|שתים עשרה|שתים עשרה)/g, " ")
-            .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי)(?=\s|$)/g, " ")
-            .replace(/(?:^|\s)(?:אחת|אחד|שתיים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|אחת עשרה|שתים עשרה|שתים עשרה)(?=\s|$)/g, " ")
-            .replace(/ב-?\d{1,2}(?::\d{2})?/g, " ")
-            .replace(/\s+/g, " ").trim() || "\u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05DE\u05DE\u05E2\u05E8\u05DB\u05EA \u05D4-AI";
-          await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
-          liveContext = `\u05E0\u05E9\u05DE\u05E8\u05D4 \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05E7\u05D5\u05DC\u05D9\u05EA \u05D0\u05D9\u05E9\u05D9\u05EA \u05E2\u05D1\u05D5\u05E8 \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 ${callerPhone} \u05D1\u05E9\u05E2\u05D4 ${hour}:${minute < 10 ? "0" + minute : minute}${isTomorrow ? " \u05DE\u05D7\u05E8" : " \u05D4\u05D9\u05D5\u05DD"}: "${message}"`;
-      }
+          let _msg = transcribedText;
+          if (_hm) _msg = _msg.replace(_hm[0], " ");
+          if (minute && !/_hm.*/.test("")) {
+            const _mre = new RegExp("ו" + "(רבע|חצי|אחת|אחד|שתיים|שתים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|חמישה עשר|עשרים וחמישה|עשרים|שלושים|ארבעים|חמישים)(?:\\s*(?:דקות|דקה))?");
+            _msg = _msg.replace(_mre, " ");
           }
+          const message = _stripAll(_msg);
+          await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
+          const _hW2 = hebNumWords(hour === 0 ? 12 : hour > 12 ? hour - 12 : hour);
+          const _tod2 = hour >= 21 || hour < 5 ? " בלילה" : hour >= 19 ? " בערב" : hour >= 12 && hour < 17 ? " בצהריים" : " בבוקר";
+          const _minP2 = minute === 15 ? " ורבע" : minute === 30 ? " וחצי" : minute > 0 ? " ו" + hebNumWords(minute) + " דקות" : "";
+          return speak(`נשמרה תזכורת ל${isTomorrow ? "מחר" : "היום"} בשעה ${_hW2}${_tod2}${_minP2}: ${message}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
+        }
         const nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
         if (nameMatch && callerPhone && env.USER_MEMORY) {
           const newName = nameMatch[1];
