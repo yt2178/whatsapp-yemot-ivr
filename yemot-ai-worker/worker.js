@@ -121,14 +121,109 @@ function makePhoneFriendlyTimes(answer) {
 }
 __name(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
 __name2(makePhoneFriendlyTimes, "makePhoneFriendlyTimes");
+function splitTtsChunks(text, maxLen) {
+  const t = String(text || "").trim();
+  const chunks = [];
+  let cur = "";
+  for (const part of t.split(/(?<=[.,;:!?])\s+|\s+/)) {
+    if ((cur + " " + part).trim().length > maxLen && cur) {
+      chunks.push(cur.trim());
+      cur = part;
+    } else {
+      cur = (cur ? cur + " " : "") + part;
+    }
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks.length ? chunks : [t];
+}
+__name(splitTtsChunks, "splitTtsChunks");
+__name2(splitTtsChunks, "splitTtsChunks");
+__name22(splitTtsChunks, "splitTtsChunks");
+async function ttsTextToYemotFile(env, text) {
+  const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
+  if (!YEMOT_TOKEN || !String(text || "").trim()) return null;
+  try {
+    const chunks = splitTtsChunks(text, 180);
+    const parts = await Promise.all(chunks.map((q, i) => fetch("https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=iw&total=" + chunks.length + "&idx=" + i + "&textlen=" + q.length + "&q=" + encodeURIComponent(q), { headers: { "User-Agent": "Mozilla/5.0" } }).then((r) => r.ok ? r.arrayBuffer() : null).catch(() => null)));
+    if (parts.some((p) => !p || !p.byteLength)) return null;
+    let total = 0;
+    for (const p of parts) total += p.byteLength;
+    if (!total) return null;
+    const blob = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+      const arr = new Uint8Array(p);
+      blob.set(arr, off);
+      off += arr.length;
+    }
+    const fname = Date.now() + "_" + Math.floor(Math.random() * 1e4) + ".wav";
+    const fd = new FormData();
+    fd.append("file", new Blob([blob], { type: "audio/mpeg" }), "a.mp3");
+    const upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${YEMOT_TOKEN}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd });
+    const upData = await upRes.json().catch(() => null);
+    if (upData && upData.responseStatus === "OK") {
+      logEvent("tts_file_uploaded", { ms: Date.now(), size: total });
+      return "ivr2:9/r/" + fname;
+    }
+    logEvent("tts_upload_failed", { status: upData?.responseStatus || "err" });
+    return null;
+  } catch (e) {
+    logEvent("tts_error", { type: e?.name || "Error" });
+    return null;
+  }
+}
+__name(ttsTextToYemotFile, "ttsTextToYemotFile");
+__name2(ttsTextToYemotFile, "ttsTextToYemotFile");
+__name22(ttsTextToYemotFile, "ttsTextToYemotFile");
+async function cleanupOldTtsFiles(env) {
+  const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
+  try {
+    const dirRes = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${YEMOT_TOKEN}&path=ivr2:9/r`);
+    const dirData = await dirRes.json().catch(() => null);
+    const files = (dirData && dirData.dirDetails) || [];
+    const cutoff = Date.now() - 108e5;
+    const jobs = [];
+    for (const f of files) {
+      const m = String(f.name || "").match(/^(\d{13})_/);
+      if (m && Number(m[1]) < cutoff) jobs.push(fetch(`https://www.call2all.co.il/ym/api/FileAction?token=${YEMOT_TOKEN}&path=ivr2:9/r/${f.name}&action=delete&newPath=&newFileName=`).catch(() => null));
+    }
+    if (jobs.length) await Promise.all(jobs);
+  } catch (_) {}
+}
+__name(cleanupOldTtsFiles, "cleanupOldTtsFiles");
+__name2(cleanupOldTtsFiles, "cleanupOldTtsFiles");
+__name22(cleanupOldTtsFiles, "cleanupOldTtsFiles");
 var worker_default = {
   async fetch(request, env, ctx) {
     const __t0 = Date.now();
-    const __res = await this.fetchInner(request, env, ctx);
+    let __res = await this.fetchInner(request, env, ctx);
     try {
       const __url = new URL(request.url);
       const __phone = __url.searchParams.get("ApiPhone") || "";
       if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
+        let __converted = null;
+        try {
+          const __raw = await __res.clone().text();
+          const __m = __raw.match(/^id_list_message=t-([\s\S]*?)(&read=(.*))?$/);
+          if (__m) {
+            const __parts = [];
+            const __mainFile = await ttsTextToYemotFile(env, __m[1]);
+            if (__mainFile) {
+              __parts.push("id_list_message=f-" + __mainFile);
+              if (__m[3] !== void 0) {
+                const __rm = __m[3].match(/^t-([^=]+)=(confirm,.*)$/);
+                if (__rm) {
+                  const __qFile = await ttsTextToYemotFile(env, __rm[1]);
+                  if (__qFile) __parts.push("read=f-" + __qFile + "=" + __rm[2]);
+                  else __parts.push("read=" + __m[3]);
+                } else __parts.push("read=" + __m[3]);
+              }
+              __converted = __parts.join("&");
+              if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
+            }
+          }
+        } catch (_) {}
+        if (__converted) __res = new Response(__converted, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
         const __ms = Date.now() - __t0;
         let __body = "";
         try { __body = (await __res.clone().text()).slice(0, 400); } catch (_) {}
