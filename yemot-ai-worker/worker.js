@@ -289,7 +289,8 @@ var worker_default = {
       if (!k) return Response.json({ error: "missing k" });
       if (k === "bridge_diag") {
         const acct = url.searchParams.get("bridge") === "2" ? 2 : 1;
-        const bd = await callBridge(env, { action: "list", max: 1 }, acct);
+        const act = url.searchParams.get("action") || "list";
+        const bd = await callBridge(env, { action: act, max: 1 }, acct);
         return Response.json({ account: acct, bridge_raw: bd });
       }
       const v = url.searchParams.get("v");
@@ -545,7 +546,8 @@ var worker_default = {
         }
       }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
-      const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)|(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])[בהל]?(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
+      const chatWord = "(?:צ[׳'״\"]?[אע]?[טת]|ש[׳'״\"]?[אע][טת]|chat)(?:ים)?(?![א-ת])";
+      const chatIntent = new RegExp("(?:(?:גוגל|google|גוגול).{0,20}(?:" + chatWord + ")|(?:" + chatWord + ").{0,20}(?:גוגל|google|גוגול)|(?:^|[\\s,])[בהל]?(?:" + chatWord + ")|איש\\s+קשר)", "i").test(effectiveText);
       const emailIntent = /(?:מייל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
       const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
@@ -558,11 +560,14 @@ var worker_default = {
       }));
       if (emailIntent) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleEmail(env, GROQ_KEY, effectiveText, callerPhone, requestId);
+        return await handleEmail(env, GROQ_KEY, effectiveText, callerPhone, requestId, detectAccount(effectiveText));
       }
       if (chatIntent || sendIntent && mentionsSavedContact) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleGoogleChat(env, GROQ_KEY, effectiveText, callerPhone, requestId);
+        return await handleGoogleChat(env, GROQ_KEY, effectiveText, callerPhone, requestId, detectAccount(effectiveText));
+      }
+      if (!emailIntent && !chatIntent && effectiveText.split(/\s+/).filter(Boolean).length <= 3 && /(?:^|\s)(?:חשבון|בחשבון|החשבון|תיבה)?\s*(?:הראשון|ראשון|השני|שני|שתיים)(?![\u05D0-\u05EA])/.test(effectiveText)) {
+        return speak("אין לי בקשה פתוחה עכשיו. אמור מה לבדוק, למשל בדוק מיילים או הודעות צ'אט");
       }
       if (sendIntent) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
@@ -903,7 +908,7 @@ function callerTail(phone) {
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
 __name22(callerTail, "callerTail");
-var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec", 2: "https://script.google.com/macros/s/AKfycbywpyptD-uJQzq9Feqjb6RnEkAyBtO0QrnGTrBtMYO4OAv1qyt_5RiUra2tGscUmVoYHw/exec" };
+var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec", 2: "https://script.google.com/macros/s/AKfycbwX4_sE_utQvSaU8_WarCw9BtZWXBfe0s6ZnM2Cdl7rtNfKiwB3GoskFAp9Uqugk7w47A/exec" };
 function detectAccount(text) {
   const t = String(text || "").replace(/\s+/g, " ");
   if (/(?:חשבון|תיבה)\s*(?:ה)?(?:שניים|שניה|שני|שתיים|2)/.test(t)) return 2;
@@ -1138,10 +1143,13 @@ function resolveContinuation(cont, reply, allContacts) {
   const text = String(reply || "").trim();
   const words = text.split(/\s+/).filter(Boolean).length;
   if (/(?:\u05D1\u05D8\u05DC|\u05D1\u05D8\u05D5\u05DC|\u05E2\u05D6\u05D5\u05D1|\u05E9\u05DB\u05D7 \u05DE\u05D6\u05D4|\u05E9\u05DB\u05D7\u05D9 \u05DE\u05D6\u05D4|\u05DC\u05D0 \u05DE\u05E9\u05E0\u05D4|\u05DB\u05DC\u05D5\u05DD|\u05EA\u05E9\u05DB\u05D7)/.test(text) && words <= 4) return { status: "cancel" };
+  const glued = text.replace(/\s+/g, "");
+  const clockQ = /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(glued) || /(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(text);
   if (cont.kind === "account") {
-    if (/(?:^|\s)(?:שתיים|שני|השני|שניה|2)(?:\s|$)/.test(text)) return { status: "resolved", account: 2 };
-    if (/(?:^|\s)(?:אחד|אחת|ראשון|הראשון|1)(?:\s|$)/.test(text)) return { status: "resolved", account: 1 };
-    if (words > 6 || /(?:שלח|מייל|צאט|תשלח)/.test(text)) return { status: "newcommand" };
+    if (/(?:^|\s)(?:שתיים|שני|השני|שניה|2)(?=[\s.,!?;:]|$)/.test(text)) return { status: "resolved", account: 2 };
+    if (/(?:^|\s)(?:אחד|אחת|ראשון|הראשון|1)(?=[\s.,!?;:]|$)/.test(text)) return { status: "resolved", account: 1 };
+    if (words > 6 || clockQ || /(?:שלח|מייל|צ[׳'\u05F4"]?[אע][טת]|ש[אע][טת](?:ים)?|תשלח|מזג|גלים|בדיחה|כלים|יכולות)/.test(text)) return { status: "newcommand" };
+    if (words >= 4) return { status: "newcommand" };
     return { status: "reask" };
   }
   if (cont.kind === "currency") {
@@ -1161,8 +1169,6 @@ function resolveContinuation(cont, reply, allContacts) {
       if (others.length === 1) return { status: "resolved", contact: { name: others[0].name, address: others[0].address } };
     }
   }
-  const glued = text.replace(/\s+/g, "");
-  const clockQ = /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(glued) || /(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(text);
   const sendQ = /(?:\u05E9\u05DC\u05D7|\u05EA\u05E9\u05DC\u05D7|\u05E9\u05DC\u05D5\u05D7|\u05E9\u05DC\u05D9\u05D7\u05D4|\u05D4\u05E2\u05D1\u05E8|\u05EA\u05E2\u05D1\u05D9\u05E8|\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA|\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD|\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8)/.test(text);
   const rateQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2|\u05D3\u05D5\u05DC\u05E8|\u05D0\u05D9\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5|\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF)/.test(text);
   if (words > 6 || clockQ || sendQ || (cont.kind === "contact" && rateQ)) return { status: "newcommand" };
@@ -1715,7 +1721,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
-    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread רק כשהבקשה היא לקרוא או לחפש הודעות שהתקבלו. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
+    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread כשהבקשה היא לקרוא, לחפש או לבדוק הודעות שהתקבלו, למשל בדוק את הצאטים, תבדוק אם יש הודעות חדשות, מה חדש או יש הודעות חדשות הן כולן unread. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
