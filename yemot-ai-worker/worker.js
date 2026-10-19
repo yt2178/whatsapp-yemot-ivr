@@ -383,7 +383,7 @@ var worker_default = {
       whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
       const formData = new FormData();
       formData.append("file", audioBlob, "recording.wav");
-      formData.append("model", "whisper-large-v3-turbo");
+      formData.append("model", "whisper-large-v3");
       formData.append("language", "he");
       formData.append("temperature", "0");
       formData.append("prompt", buildWhisperPrompt(whisperContacts));
