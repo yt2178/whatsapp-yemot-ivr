@@ -226,7 +226,7 @@ var worker_default = {
               if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
             }
           } else {
-            const __ro = __raw.match(/^read=t-([^=]+)=((?:confirm|account),[\s\S]*)$/);
+            const __ro = __raw.match(/^read=t-([^=]+)=((?:confirm|account|link),[\s\S]*)$/);
             if (__ro) {
               const __qFile = await ttsTextToYemotFile(env, __ro[1]);
               if (__qFile) {
@@ -461,7 +461,7 @@ var worker_default = {
             return speak("לא הבנתי, במה עוד אפשר לעזור?");
           }
           await setContState(env, callerPhone, { ...cont, asks });
-          return speak(cont.question || "אנא ענה על השאלה הקודמת");
+          return openQuestion(cont.question || "אנא ענה על השאלה הקודמת");
         }
         await clearContState(env, callerPhone);
       }
@@ -525,10 +525,28 @@ var worker_default = {
       const _weatherQ = /(?:מ[זס]ג\s*ה?\s*או\s*ו?ו?\s*י\s*ר|תח[זס]י[תהונ]|כמה מעלות|טמפרטורה|מ[זס]ג\s*ה?אויר)/.test(transcribedText);
       if (_weatherQ && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
         try {
-          const _WCITIES = { "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD": [31.78, 35.22], "\u05D7\u05D9\u05E4\u05D4": [32.79, 34.99], "\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2": [31.25, 34.79], "\u05D0\u05D9\u05DC\u05EA": [29.55, 34.95], "\u05E0\u05EA\u05E0\u05D9\u05D4": [32.33, 34.86], "\u05E4\u05EA\u05D7 \u05EA\u05E7\u05D5\u05D5\u05D4": [32.09, 34.89], "\u05D0\u05E9\u05D3\u05D5\u05D3": [31.8, 34.65], "\u05E6\u05E4\u05EA": [32.96, 35.5], "\u05D8\u05D1\u05E8\u05D9\u05D4": [32.79, 35.53], "\u05E8\u05D7\u05D5\u05D1\u05D5\u05EA": [31.9, 34.9], "\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1": [32.08, 34.78] };
+          const _WCITIES = { "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD": [31.78, 35.22], "\u05E4\u05EA\u05D7 \u05EA\u05E7\u05D5\u05D5\u05D4": [32.09, 34.89], "\u05E8\u05D0\u05E9 \u05D4\u05E2\u05D9\u05DF": [32.09, 34.95], "\u05D7\u05D9\u05E4\u05D4": [32.79, 34.99], "\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2": [31.25, 34.79], "\u05D0\u05D9\u05DC\u05EA": [29.55, 34.95], "\u05E0\u05EA\u05E0\u05D9\u05D4": [32.33, 34.86], "\u05D0\u05E9\u05D3\u05D5\u05D3": [31.8, 34.65], "\u05E6\u05E4\u05EA": [32.96, 35.5], "\u05D8\u05D1\u05E8\u05D9\u05D4": [32.79, 35.53], "\u05E8\u05D7\u05D5\u05D1\u05D5\u05EA": [31.9, 34.9], "\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1": [32.08, 34.78], "\u05E8\u05D0\u05E9\u05D5\u05DF \u05DC\u05E6\u05D9\u05D5\u05DF": [31.96, 34.87], "\u05E8\u05DE\u05EA \u05D2\u05DF": [32.07, 34.82], "\u05D1\u05E0\u05D9 \u05D1\u05E8\u05E7": [32.08, 34.84], "\u05D7\u05D3\u05E8\u05D4": [32.44, 34.92], "\u05D4\u05E8\u05E6\u05DC\u05D9\u05D4": [32.16, 34.84], "\u05DB\u05E4\u05E8 \u05E1\u05D1\u05D0": [32.17, 34.94], "\u05DE\u05D5\u05D3\u05D9\u05E2\u05D9\u05DF": [31.9, 35.01], "\u05D0\u05E9\u05E7\u05DC\u05D5\u05DF": [31.67, 34.57], "\u05D1\u05EA \u05D9\u05DD": [32.01, 34.75], "\u05D2\u05D1\u05E2\u05EA\u05D9\u05D9\u05DD": [32.07, 34.81], "\u05D9\u05D1\u05E0\u05D4": [31.87, 34.74], "\u05E2\u05E4\u05D5\u05DC\u05D4": [32.61, 35.29], "\u05D1\u05D9\u05EA \u05E9\u05DE\u05E9": [31.74, 34.99], "\u05E0\u05D4\u05E8\u05D9\u05D4": [32.98, 35.09], "\u05E7\u05E8\u05D9\u05EA \u05E9\u05DE\u05D5\u05E0\u05D4": [33.21, 35.57], "\u05E7\u05E8\u05D9\u05EA \u05D2\u05EA": [31.61, 34.77] };
           let _wCity = "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD", _wLat = 31.78, _wLon = 35.22;
+          const _wText = transcribedText.replace(/(?:^|\s)\u05DC\u05D0\s+\u05D1[^\s,.:;]+/g, " ");
           for (const [_ct, _co] of Object.entries(_WCITIES)) {
-            if (transcribedText.includes(_ct)) { _wCity = _ct; _wLat = _co[0]; _wLon = _co[1]; break; }
+            if (_wText.includes(_ct)) { _wCity = _ct; _wLat = _co[0]; _wLon = _co[1]; }
+          }
+          if (_wCity === "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD" && !/\u05D9\u05E8\u05D5\u05E9\u05DC/.test(_wText)) {
+            try {
+              const _cm = _wText.match(/(?:^|\s)(?:\u05D1|\u05E9\u05D1|\u05DC\u05D1)([\u05D0-\u05EA"']+(?:\s[\u05D0-\u05EA"']+)?)/g);
+              if (_cm) {
+                const cands = _cm.map((m) => m.replace(/^[^\u05D0-\u05EA]*/, "").replace(/^(?:\u05E9\u05D1|\u05DC\u05D1|\u05D1)/, "").replace(/^\u05E2\u05D9\u05E8\s*/, "").replace(/\s(?:\u05DE\u05D7\u05E8|\u05D4\u05D9\u05D5\u05DD|\u05E2\u05DB\u05E9\u05D9\u05D5|\u05D1\u05D1\u05D5\u05E7\u05E8|\u05D1\u05E2\u05E8\u05D1|\u05D1\u05DC\u05D9\u05DC\u05D4)$/, "")).reverse().slice(0, 3);
+                for (const _cd of cands) {
+                  if (_cd.length < 2) continue;
+                  const _gcres = await fetch("https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent(_cd) + "&count=5&language=he&format=json", { headers: { "User-Agent": "Mozilla/5.0" } });
+                  if (!_gcres.ok) continue;
+                  const _gd = await _gcres.json();
+                  const _hit = (_gd.results || []).find((r) => String(r.country_code || "").toUpperCase() === "IL");
+                  if (_hit) { _wCity = _cd; _wLat = _hit.latitude; _wLon = _hit.longitude; break; }
+                }
+              }
+            } catch (_) {
+            }
           }
           const _wres = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${_wLat}&longitude=${_wLon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=2&timezone=Asia%2FJerusalem`, { headers: { "User-Agent": "Mozilla/5.0" } });
           if (_wres.ok) {
@@ -770,6 +788,12 @@ var worker_default = {
         }
       } catch (_) {
       }
+      const pairAns = await currencyTextAnswer(effectiveText);
+      if (pairAns) {
+        logEvent("currency_pair_answered", { caller: callerTail(callerPhone) });
+        await saveConvoTurn(env, transcribedText, pairAns);
+        return speak(pairAns);
+      }
       const euroQ = asksEuroRate(effectiveText);
       const currOnlyQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05E1[\u05D9]?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2)/.test(effectiveText) && !asksDollarRate(effectiveText) && !euroQ;
       if (currOnlyQ) {
@@ -947,7 +971,7 @@ function accountReadPrompt(pend) {
   const isChat = pend.service === "chat";
   const isSend = pend.verb === "שליחה";
   const v1 = isSend ? (isChat ? "לשליחת הודעת הצאט מ" : "לשליחת המייל מ") : isChat ? "לבדיקת הודעות הצאט ב" : "לבדיקת המיילים ב";
-  const question = v1 + "החשבון שמתחיל בוואי אפס חמישים הקש אחת, " + v1 + "החשבון שמתחיל בוואי טי אפס שלוש הקש שתיים";
+  const question = v1 + "החשבון וואי אפס חמש אפס הקש אחת, " + v1 + "החשבון וואי טי אפס חמש שלוש הקש שתיים";
   return textResponse(`read=t-${question}=account,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(accountReadPrompt, "accountReadPrompt");
@@ -1156,6 +1180,138 @@ function isPronounRef(text) {
 __name(isPronounRef, "isPronounRef");
 __name2(isPronounRef, "isPronounRef");
 __name22(isPronounRef, "isPronounRef");
+const CURRENCIES = [
+  { code: "USD", names: ["דולר אמריקאי", "דולר"], he: "דולר" },
+  { code: "EUR", names: ["אירו", "יורו"], he: "אירו" },
+  { code: "GBP", names: ["לירה שטרלינג", "שטרלינג", "פאונד"], he: "לירה שטרלינג" },
+  { code: "JPY", names: ["ין"], he: "ין יפני" },
+  { code: "CHF", names: ["פרנק שוויצרי", "פרנק"], he: "פרנק שוויצרי" },
+  { code: "CAD", names: ["דולר קנדי"], he: "דולר קנדי" },
+  { code: "AUD", names: ["דולר אוסטרלי"], he: "דולר אוסטרלי" },
+  { code: "CNY", names: ["יואן"], he: "יואן" },
+  { code: "RUB", names: ["רובל"], he: "רובל" },
+  { code: "PLN", names: ["זלוטי"], he: "זלוטי" },
+  { code: "AED", names: ["דירהם"], he: "דירהם" },
+  { code: "TRY", names: ["לירה טורקית"], he: "לירה טורקית" },
+  { code: "SEK", names: ["קרונה שוודית"], he: "קרונה שוודית" },
+  { code: "CZK", names: ["קרונה צכית", "קורונה צכית"], he: "קרונה צכית" },
+  { code: "DKK", names: ["קרונה דנית"], he: "קרונה דנית" },
+  { code: "NOK", names: ["קרונה נורווגית"], he: "קרונה נורווגית" },
+  { code: "THB", names: ["באט תאילנדי", "באט"], he: "באט תאילנדי" },
+  { code: "ZAR", names: ["רנד"], he: "רנד" },
+  { code: "MXN", names: ["פסו"], he: "פסו מקסיקני" },
+  { code: "ILS", names: ["שקלים", "שקל"], he: "שקל" },
+  { code: "BTC", names: ["ביטקוין", "ביקוד", "ביטקויד"], he: "ביטקוין" },
+  { code: "ETH", names: ["אתריום", "איתריום"], he: "אתריום" }
+];
+const CUR_SHORT_RE = { "\u05E9\u05E7\u05DC": "\u05E9\u05E7\u05DC", "\u05E9\u05E7\u05DC\u05D9\u05DD": "\u05E9\u05E7\u05DC\u05D9\u05DD" };
+function findCurrencyWords(text) {
+  let t = " " + String(text || "").replace(/[,.;:!?]/g, " ") + " ";
+  const hits = [];
+  const names = [];
+  for (const c of CURRENCIES) for (const nm of c.names) names.push({ nm, code: c.code, he: c.he });
+  names.sort((a, b) => b.nm.length - a.nm.length);
+  for (const { nm, code, he } of names) {
+    if (["\u05D9\u05DF", "\u05E8\u05E0\u05D3", "\u05D1\u05D0\u05D8", "\u05E4\u05E1\u05D5"].includes(nm)) {
+      const re = new RegExp("(?:^|\\s)" + nm + "(?![\u05D0-\u05EA])", "g");
+      let m;
+      while ((m = re.exec(t)) !== null) hits.push({ code, he, pos: m.index, len: nm.length });
+      continue;
+    }
+    if (nm === "\u05E9\u05E7\u05DC" || nm === "\u05E9\u05E7\u05DC\u05D9\u05DD") {
+      const re = new RegExp("(?:^|[^\u05DE])" + nm, "g");
+      let m;
+      while ((m = re.exec(t)) !== null) hits.push({ code, he, pos: m.index + 1, len: nm.length });
+      continue;
+    }
+    let idx = t.indexOf(nm);
+    while (idx >= 0) {
+      hits.push({ code, he, pos: idx, len: nm.length });
+      t = t.slice(0, idx) + " ".repeat(nm.length) + t.slice(idx + nm.length);
+      idx = t.indexOf(nm);
+    }
+  }
+  hits.sort((a, b) => a.pos - b.pos);
+  return hits;
+}
+__name(findCurrencyWords, "findCurrencyWords");
+__name2(findCurrencyWords, "findCurrencyWords");
+__name22(findCurrencyWords, "findCurrencyWords");
+function updatedStampText(unix) {
+  try {
+    const d = new Date(unix * 1000);
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", day: "numeric", month: "numeric", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(d);
+    const get = (t) => (parts.find((p) => p.type === t) || {}).value || "";
+    const day = parseInt(get("day"), 10), mon = parseInt(get("month"), 10);
+    const hh = parseInt(get("hour"), 10), mm = parseInt(get("minute"), 10);
+    const months = ["\u05D9\u05E0\u05D5\u05D0\u05E8", "\u05E4\u05D1\u05E8\u05D5\u05D0\u05E8", "\u05DE\u05E8\u05E5", "\u05D0\u05E4\u05E8\u05D9\u05DC", "\u05DE\u05D0\u05D9", "\u05D9\u05D5\u05E0\u05D9", "\u05D9\u05D5\u05DC\u05D9", "\u05D0\u05D5\u05D2\u05D5\u05E1\u05D8", "\u05E1\u05E4\u05D8\u05DE\u05D1\u05E8", "\u05D0\u05D5\u05E7\u05D8\u05D5\u05D1\u05E8", "\u05E0\u05D5\u05D1\u05DE\u05D1\u05E8", "\u05D3\u05E6\u05DE\u05D1\u05E8"];
+    let time = speakTimeNumber(hh);
+    if (mm > 0) time += " \u05D5" + speakTimeNumber(mm);
+    return "\u05E2\u05D5\u05D3\u05DB\u05DF \u05D1\u05EA\u05D0\u05E8\u05D9\u05DA " + day + " \u05D1" + months[mon - 1] + " " + new Date().getFullYear() + " \u05D1\u05E9\u05E2\u05D4 " + time;
+  } catch (_) {
+    return "";
+  }
+}
+__name(updatedStampText, "updatedStampText");
+__name2(updatedStampText, "updatedStampText");
+__name22(updatedStampText, "updatedStampText");
+async function currencyRateAnswer(from, to) {
+  try {
+    const r = await fetch("https://open.er-api.com/v6/latest/ILS", { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j?.result !== "success" || !j.rates) return null;
+    const price = (code) => code === "ILS" ? 1 : 1 / Number(j.rates[code]);
+    const pf = price(from.code), pt = price(to.code);
+    if (!Number.isFinite(pf) || !Number.isFinite(pt) || pf <= 0 || pt <= 0) return null;
+    const rate = pf / pt;
+    let valStr;
+    const cryptoFrom = ["BTC", "ETH"].includes(from.code);
+    if (to.code === "ILS") {
+      if (cryptoFrom) valStr = Math.round(rate).toLocaleString("en-US") + " \u05E9\u05E7\u05DC\u05D9\u05DD";
+      else {
+        const sh = Math.floor(rate), ag = Math.round((rate - sh) * 100);
+        valStr = sh + " \u05E9\u05E7\u05DC\u05D9\u05DD \u05D5" + ag + " \u05D0\u05D2\u05D5\u05E8\u05D5\u05EA";
+      }
+    } else {
+      const rounded = rate >= 100 ? String(Math.round(rate)) : String(Math.round(rate * 100) / 100);
+      valStr = rounded + " " + to.he;
+    }
+    const stamp = j.time_last_update_unix ? updatedStampText(j.time_last_update_unix) : "";
+    return "\u05E9\u05E2\u05E8 \u05D4" + from.he + " \u05DE\u05D5\u05DC \u05D4" + to.he + " \u05D4\u05D5\u05D0 " + valStr + (stamp ? ", " + stamp : "");
+  } catch (_) {
+    return null;
+  }
+}
+__name(currencyRateAnswer, "currencyRateAnswer");
+__name2(currencyRateAnswer, "currencyRateAnswer");
+__name22(currencyRateAnswer, "currencyRateAnswer");
+async function currencyTextAnswer(text) {
+  const hits = findCurrencyWords(text);
+  if (!hits.length) return null;
+  let from = null, to = null;
+  const molIdx = String(text || "").indexOf("\u05DE\u05D5\u05DC");
+  if (molIdx >= 0) {
+    const before = hits.filter((h) => h.pos < molIdx), after = hits.filter((h) => h.pos >= molIdx);
+    from = before[0] || hits[0];
+    to = after[0] || hits.find((h) => h.code !== from.code);
+  } else {
+    const nonIls = hits.filter((h) => h.code !== "ILS");
+    if (!nonIls.length) return null;
+    if (nonIls.length >= 2) {
+      from = nonIls[0];
+      to = nonIls[1];
+    } else {
+      from = nonIls[0];
+      to = { code: "ILS", he: "\u05E9\u05E7\u05DC" };
+    }
+  }
+  if (!from || !to || from.code === to.code) return null;
+  return await currencyRateAnswer(from, to);
+}
+__name(currencyTextAnswer, "currencyTextAnswer");
+__name2(currencyTextAnswer, "currencyTextAnswer");
+__name22(currencyTextAnswer, "currencyTextAnswer");
 function findCurrency(text) {
   const t = String(text || "").replace(/[.,!?;:\u05C4]/g, " ");
   if (/(?:^|\s)(?:\u05D3\u05D5\u05DC\u05E8\S*|\u05D3\u05D5\u05DC\u05D0\u05E8\S*)(?:$|\s|,)|usd|dollar/i.test(t)) return "usd";
@@ -1208,7 +1364,7 @@ function resolveContinuation(cont, reply, allContacts) {
   const glued = text.replace(/\s+/g, "");
   const clockQ = /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(glued) || /(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(text);
   if (cont.kind === "mailrange") {
-    if (/(?:^|\s)(?:ב?ה?יום|ב?ה?אתמול|ב?ה?יממה)(?![\u05D0-\u05EA])/.test(text) || /(?:ביום האחרון|ביממה האחרונה|ביממה אחרונה)/.test(text)) return { status: "resolved", timeframe: "day" };
+    if (/(?:^|\s)(?:ב?ה?יום|ב?ה?אתמול|ב?ה?יממה|ב?ה?ימום|ב?ה?יוממה)(?![\u05D0-\u05EA])/.test(text) || /(?:יום|יממה|ימום)\s*ה?א?ח\s?רונ/.test(text)) return { status: "resolved", timeframe: "day" };
     if (/(?:^|\s)ב?(?:שבו[לער]|שבועות|שבולים)/.test(text)) return { status: "resolved", timeframe: "week" };
     if (/(?:^|\s)ב?(?:חוד[שס]|חודשיים)/.test(text)) return { status: "resolved", timeframe: "month" };
     if (/(?:^|\s)(?:ב?הכל|הכול|כל\s*הזמנים)(?![\u05D0-\u05EA])/.test(text)) return { status: "resolved", timeframe: "all" };
@@ -1351,7 +1507,7 @@ __name22(executeContinuation, "executeContinuation");
 async function correctTranscription(text) {
   const orig = (text || "").trim();
   if (!orig || orig.length > 300) return orig;
-  const SYS = "\u05D0\u05EA\u05D4 \u05DE\u05EA\u05E7\u05D9\u05DF \u05D8\u05E7\u05E1\u05D8 \u05E2\u05D1\u05E8\u05D9 \u05E9\u05EA\u05D5\u05DE\u05DC\u05DC \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DE\u05D4\u05E7\u05DC\u05D8\u05EA \u05D8\u05DC\u05E4\u05D5\u05DF \u05D1\u05E7\u05D5 \u05E2\u05D5\u05D6\u05E8 \u05D0\u05D9\u05E9\u05D9. \u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5: \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05DE\u05D8\u05D1\u05E2\u05D5\u05EA, \u05DE\u05D9\u05D9\u05DC \u05D5\u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA. \u05EA\u05E7\u05DF \u05D0\u05DA \u05D5\u05E8\u05E7 \u05E9\u05D9\u05D1\u05D5\u05E9\u05D9 \u05EA\u05DE\u05DC\u05D5\u05DC \u05D1\u05E8\u05D5\u05E8\u05D9\u05DD: \u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05DE\u05EA\u05D7\u05DC\u05E4\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA (\u05D6/\u05E1, \u05D8/\u05EA, \u05DB/\u05D7, \u05D3/\u05D6) \u05D0\u05D5 \u05DE\u05D9\u05DC\u05D4 \u05DC\u05D0 \u05E7\u05D9\u05D9\u05DE\u05EA \u05E9\u05D4\u05D2\u05D9\u05D9\u05EA\u05D4 \u05D3\u05D5\u05DE\u05D4 \u05DC\u05DE\u05D9\u05DC\u05D4 \u05E7\u05D9\u05D9\u05DE\u05EA \u05DE\u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5. \u05D3\u05D5\u05D2\u05DE\u05D0\u05D5\u05EA: \"תסכיר לי\" \u2192 \"תזכיר לי\". \"תסכורת\" \u2192 \"תזכורת\". \u05DB\u05DC\u05DC\u05D9 \u05D1\u05E8\u05D6\u05DC: 1. \u05D0\u05DC \u05EA\u05E9\u05E0\u05D4 \u05DE\u05D9\u05DC\u05D9\u05DD \u05EA\u05E7\u05D9\u05E0\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D2\u05DD \u05D0\u05DD \u05E0\u05E8\u05D0\u05D5\u05EA \u05DE\u05D5\u05D6\u05E8\u05D5\u05EA \u05DC\u05DA. 2. \u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3, \u05D0\u05DC \u05EA\u05E9\u05DE\u05D8\u05D5 \u05D0\u05DC \u05EA\u05D7\u05DC\u05D9\u05E3 \u05DE\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05E9\u05DE\u05D5\u05EA. 3. \u05D0\u05DD \u05D0\u05D9\u05E0\u05DA \u05D1\u05D8\u05D5\u05D7 \u05E9\u05D9\u05E9 \u05E9\u05D9\u05D1\u05D5\u05E1 - \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9 \u05DE\u05D9\u05DC\u05D4 \u05D1\u05DE\u05D9\u05DC\u05D4. 4. \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05EA\u05D5\u05E7\u05DF, \u05D1\u05DC\u05D9 \u05E0\u05E7\u05D5\u05D3\u05EA\u05D9\u05D9\u05DD, \u05D4\u05E2\u05E8\u05D5\u05EA \u05D0\u05D5 \u05D4\u05E1\u05D1\u05D9\u05E8\u05D9\u05DD.";
+  const SYS = "\u05D0\u05EA\u05D4 \u05DE\u05EA\u05E7\u05D9\u05DF \u05D8\u05E7\u05E1\u05D8 \u05E2\u05D1\u05E8\u05D9 \u05E9\u05EA\u05D5\u05DE\u05DC\u05DC \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DE\u05D4\u05E7\u05DC\u05D8\u05EA \u05D8\u05DC\u05E4\u05D5\u05DF \u05D1\u05E7\u05D5 \u05E2\u05D5\u05D6\u05E8 \u05D0\u05D9\u05E9\u05D9. \u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5: \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05DE\u05D8\u05D1\u05E2\u05D5\u05EA, \u05DE\u05D9\u05D9\u05DC \u05D5\u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA. \u05EA\u05E7\u05DF \u05D0\u05DA \u05D5\u05E8\u05E7 \u05E9\u05D9\u05D1\u05D5\u05E9\u05D9 \u05EA\u05DE\u05DC\u05D5\u05DC \u05D1\u05E8\u05D5\u05E8\u05D9\u05DD: \u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05DE\u05EA\u05D7\u05DC\u05E4\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA (\u05D6/\u05E1, \u05D8/\u05EA, \u05DB/\u05D7, \u05D3/\u05D6) \u05D0\u05D5 \u05DE\u05D9\u05DC\u05D4 \u05DC\u05D0 \u05E7\u05D9\u05D9\u05DE\u05EA \u05E9\u05D4\u05D2\u05D9\u05D9\u05EA\u05D4 \u05D3\u05D5\u05DE\u05D4 \u05DC\u05DE\u05D9\u05DC\u05D4 \u05E7\u05D9\u05D9\u05DE\u05EA \u05DE\u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5. \u05D3\u05D5\u05D2\u05DE\u05D0\u05D5\u05EA: \"תסכיר לי\" \u2192 \"תזכיר לי\". \"תסכורת\" \u2192 \"תזכורת\". \"בשבול האחרון\" \u2192 \"בשבוע האחרון\". \"בחודס האחרון\" \u2192 \"בחודש האחרון\". \"ימום\" \u2192 \"ביממה\". \u05DB\u05DC\u05DC\u05D9 \u05D1\u05E8\u05D6\u05DC: 1. \u05D0\u05DC \u05EA\u05E9\u05E0\u05D4 \u05DE\u05D9\u05DC\u05D9\u05DD \u05EA\u05E7\u05D9\u05E0\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D2\u05DD \u05D0\u05DD \u05E0\u05E8\u05D0\u05D5\u05EA \u05DE\u05D5\u05D6\u05E8\u05D5\u05EA \u05DC\u05DA. 2. \u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3, \u05D0\u05DC \u05EA\u05E9\u05DE\u05D8\u05D5 \u05D0\u05DC \u05EA\u05D7\u05DC\u05D9\u05E3 \u05DE\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05E9\u05DE\u05D5\u05EA. 3. \u05D0\u05DD \u05D0\u05D9\u05E0\u05DA \u05D1\u05D8\u05D5\u05D7 \u05E9\u05D9\u05E9 \u05E9\u05D9\u05D1\u05D5\u05E1 - \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9 \u05DE\u05D9\u05DC\u05D4 \u05D1\u05DE\u05D9\u05DC\u05D4. 4. \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05EA\u05D5\u05E7\u05DF, \u05D1\u05DC\u05D9 \u05E0\u05E7\u05D5\u05D3\u05EA\u05D9\u05D9\u05DD, \u05D4\u05E2\u05E8\u05D5\u05EA \u05D0\u05D5 \u05D4\u05E1\u05D1\u05D9\u05E8\u05D9\u05DD.";
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 8000);
@@ -1640,9 +1796,16 @@ __name(handleConfirm, "handleConfirm");
 __name2(handleConfirm, "handleConfirm");
 __name22(handleConfirm, "handleConfirm");
 async function askMailRange(env, callerPhone, account) {
-  await setContState(env, callerPhone, { kind: "mailrange", account: account || 1, unread: false, question: "מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?", ts: Date.now() });
-  return speak("מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?");
+  const q = "מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?";
+  await setContState(env, callerPhone, { kind: "mailrange", account: account || 1, unread: false, question: q, ts: Date.now() });
+  return openQuestion(q);
 }
+function openQuestion(text) {
+  return textResponse(`read=t-${text}=link,,record,/3/rec,,no,yes,,1,30`);
+}
+__name(openQuestion, "openQuestion");
+__name2(openQuestion, "openQuestion");
+__name22(openQuestion, "openQuestion");
 __name(askMailRange, "askMailRange");
 __name2(askMailRange, "askMailRange");
 __name22(askMailRange, "askMailRange");
