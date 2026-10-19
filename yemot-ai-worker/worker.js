@@ -218,7 +218,11 @@ var worker_default = {
                   else __parts.push("read=" + __m[3]);
                 } else __parts.push("read=" + __m[3]);
               }
-              __converted = __parts.join("&");
+              if (__m[3] === void 0) {
+                const __fuFile = await ttsTextToYemotFile(env, "אמרו את בקשתכם הבאה או נתקו לסיום");
+                if (__fuFile) __converted = __parts.join("&") + "&read=f-" + __fuFile + "=link,,record,/3/rec,,no,yes,,1,30";
+              }
+              __converted = __converted || __parts.join("&");
               if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
             }
           } else {
