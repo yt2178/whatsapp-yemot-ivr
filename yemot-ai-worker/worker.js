@@ -1203,6 +1203,15 @@ function resolveContinuation(cont, reply, allContacts) {
   if (/(?:\u05D1\u05D8\u05DC|\u05D1\u05D8\u05D5\u05DC|\u05E2\u05D6\u05D5\u05D1|\u05E9\u05DB\u05D7 \u05DE\u05D6\u05D4|\u05E9\u05DB\u05D7\u05D9 \u05DE\u05D6\u05D4|\u05DC\u05D0 \u05DE\u05E9\u05E0\u05D4|\u05DB\u05DC\u05D5\u05DD|\u05EA\u05E9\u05DB\u05D7)/.test(text) && words <= 4) return { status: "cancel" };
   const glued = text.replace(/\s+/g, "");
   const clockQ = /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(glued) || /(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(text);
+  if (cont.kind === "mailrange") {
+    if (/(?:^|\s)(?:ב?ה?יום|ב?ה?אתמול|ב?ה?יממה)(?![\u05D0-\u05EA])/.test(text) || /(?:ביום האחרון|ביממה האחרונה|ביממה אחרונה)/.test(text)) return { status: "resolved", timeframe: "day" };
+    if (/(?:^|\s)ב?(?:שבו[לער]|שבועות|שבולים)/.test(text)) return { status: "resolved", timeframe: "week" };
+    if (/(?:^|\s)ב?(?:חוד[שס]|חודשיים)/.test(text)) return { status: "resolved", timeframe: "month" };
+    if (/(?:^|\s)(?:ב?הכל|הכול|כל\s*הזמנים)(?![\u05D0-\u05EA])/.test(text)) return { status: "resolved", timeframe: "all" };
+    const lifeQ = /(?:שלח|מייל|צ[׳'\u05F4"]?[אע][טת]|תשלח|מזג|גלים|בדיחה|השעה|תאריך|הקש)/.test(text);
+    if (words >= 4 || lifeQ) return { status: "newcommand" };
+    return { status: "reask" };
+  }
   if (cont.kind === "currency") {
     const cur = findCurrency(text);
     if (cur) return { status: "resolved", currency: cur };
@@ -1306,6 +1315,11 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
         return speak(msg);
       }
       return speak("\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E7\u05D1\u05DC \u05DB\u05E8\u05D2\u05E2 \u05D0\u05EA \u05E9\u05E2\u05E8 \u05D4\u05DE\u05D8\u05D1\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2");
+    }
+    if (cont.kind === "mailrange" && res.timeframe) {
+      await clearContState(env, callerPhone);
+      logEvent("cont_mailrange_resolved", { timeframe: res.timeframe, caller: callerTail(callerPhone) });
+      return await emailDigest(env, env.GROQ_KEY || "", callerPhone, requestId, cont.account || 1, res.timeframe, !!cont.unread);
     }
     if (cont.kind === "contact" && res.contact) {
       const contact = res.contact;
@@ -1621,6 +1635,49 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
 __name(handleConfirm, "handleConfirm");
 __name2(handleConfirm, "handleConfirm");
 __name22(handleConfirm, "handleConfirm");
+async function askMailRange(env, callerPhone, account) {
+  await setContState(env, callerPhone, { kind: "mailrange", account: account || 1, unread: false, question: "מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?", ts: Date.now() });
+  return speak("מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?");
+}
+__name(askMailRange, "askMailRange");
+__name2(askMailRange, "askMailRange");
+__name22(askMailRange, "askMailRange");
+async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timeframe, unread) {
+  try {
+    const rangeQ = timeframe === "day" ? "newer_than:1d" : timeframe === "week" ? "newer_than:7d" : timeframe === "month" ? "newer_than:30d" : "";
+    const q = [unread ? "is:unread" : "", rangeQ].filter(Boolean).join(" ") || "in:inbox";
+    const messages = [];
+    let pageToken = null;
+    for (let i = 0; i < 5; i++) {
+      const payload = { action: "search", query: q, max: 10 };
+      if (pageToken) payload.pageToken = pageToken;
+      const data = await callBridge(env, payload, account);
+      if (!data.ok) {
+        logEvent("digest_bridge_failed", { account });
+        return speak(unread ? "לא הצלחתי כרגע לבדוק את המיילים שלא נקראו" : "אין עדיין חיבור פעל למייל, יש להשלים את אישור ההרשאה");
+      }
+      messages.push(...(data.messages || []));
+      pageToken = data.next_page_token || data.nextPageToken || null;
+      if (!pageToken) break;
+    }
+    await kvSetList(env, "lastlist_" + callerPhone, { messages: messages.slice(0, 10), ts: Date.now(), account });
+    const rangeTxt = timeframe === "day" ? "ביממה האחרונה" : timeframe === "week" ? "בשבוע האחרון" : timeframe === "month" ? "בחודש האחרון" : "";
+    if (!messages.length) return speak(unread ? "אין מיילים שלא נקראו" : `אין מיילים חדשים ${rangeTxt}`);
+    const items = messages.slice(0, 50).map((m, i) => ({ n: i + 1, from: cleanFromName(m.from), address: m.from, subject: String(m.subject || "").slice(0, 80), snippet: String(m.snippet || "").slice(0, 100) }));
+    const sumPrompt = "אתה עוזר קולי בעברית בטלפון. קיבלת רשימת מיילים ממוינת מהחדש לישן. תסכם אותה למאזין בעברית מדוברת לפי הכללים: מיילים מאנשים פרטיים או גופים חשובים הזכר בשם השולח ובנושא ואמור אם חשוב. התראות אוטומטיות, ניוזלטרים, פרסומות ומיילים מתמיכה של חברות קבץ יחד בקצרה, למשל שתי התראות אבטחה מגוגל. אל תקריא את כל הרשימה אם היא ארוכה, סכם בכמה משפטים. כתוב בעברית בלי נקודות ובלי מקפים ובלי פסיקים כפולים. אם מייל נראה דחוף או חשוב במיוחד, הדגש זאת תחילה. הרשימה: " + JSON.stringify(items);
+    const ans = await groqChatShort(GROQ_KEY, sumPrompt, "סכם את המיילים", 700);
+    const totalTxt = messages.length >= 50 ? "יותר מחמישים" : String(messages.length);
+    const prefix = unread ? "בדקתי את המיילים שלא נקראו" : `בדקתי את המיילים ${rangeTxt}`;
+    const suffix = messages.length <= 10 ? "" : " אם תרצה לשמוע מייל מסוים, אמור קרא מייל לפי מספר";
+    return speak(`${prefix}, סך הכול ${totalTxt} מיילים. ${ans || "לא הצלחתי לסכם, אמור הקרא רשימת מיילים"}.${suffix}`);
+  } catch (e) {
+    logEvent("digest_error", { msg: String(e && e.message || e).slice(0, 120) });
+    return speak("משהו בבדיקת המיילים השתבש, נסה שוב");
+  }
+}
+__name(emailDigest, "emailDigest");
+__name2(emailDigest, "emailDigest");
+__name22(emailDigest, "emailDigest");
 async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId, account = null) {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) {
@@ -1629,7 +1686,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("אין הרשאה לגישה למייל ממספר זה");
     }
-    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
+    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
@@ -1648,6 +1705,14 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     const p = plan.params || {};
     logEvent("email_intent", { action: String(plan.action).slice(0, 20), caller: callerTail(callerPhone) });
     const listKey = "lastlist_" + callerPhone;
+    if (plan.action === "digest") {
+      const unread = !!(p.unread || /(?:לא\s*(?:נקראו|קראתי|נקרא|נקראתי))/.test(transcribedText));
+      let timeframe = String(p.timeframe || "ask");
+      if (timeframe !== "day" && timeframe !== "week" && timeframe !== "month" && timeframe !== "all") timeframe = "ask";
+      if (!account) return await askAccount(env, callerPhone, "email", transcribedText, "בדיקה");
+      if (timeframe === "ask" && !unread) return await askMailRange(env, callerPhone, account);
+      return await emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timeframe, unread);
+    }
     if (plan.action === "list" || plan.action === "summarize" || plan.action === "search") {
       if (!account) return await askAccount(env, callerPhone, "email", transcribedText, "בדיקה");
       const payload = plan.action === "search" ? { action: "search", query: p.query || "", max: parseInt(p.count) || 5 } : { action: "list", max: Math.min(parseInt(p.count) || 5, 10) };
