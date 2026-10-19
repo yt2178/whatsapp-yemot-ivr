@@ -902,7 +902,7 @@ function callerTail(phone) {
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
 __name22(callerTail, "callerTail");
-var BRIDGE_URL = "https://script.google.com/macros/s/AKfycbyxunjICEfNwuvhQNlf7nBJTEJ65IJFLC2dNUjf5TDb4aiGQPRX7cQ0w1RjymEoNhwYzQ/exec";
+var BRIDGE_URL = "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec";
 async function callBridge(env, payload) {
   const res = await fetch(BRIDGE_URL, {
     method: "POST",
