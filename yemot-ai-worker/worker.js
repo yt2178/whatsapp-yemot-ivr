@@ -287,6 +287,10 @@ var worker_default = {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       const k = url.searchParams.get("k") || "";
       if (!k) return Response.json({ error: "missing k" });
+      if (k === "bridge_diag") {
+        const bd = await callBridge(env, { action: "list", max: 1 });
+        return Response.json({ bridge_raw: bd });
+      }
       const v = url.searchParams.get("v");
       if (v !== null && request.method === "POST") {
         let parsed;
@@ -499,6 +503,46 @@ var worker_default = {
         return speak(capsA);
       }
       }
+      const _weatherQ = /(?:מ[זס]ג\s*ה?\s*או\s*ו?ו?\s*י\s*ר|תח[זס]י[תהונ]|כמה מעלות|טמפרטורה|מ[זס]ג\s*ה?אויר)/.test(transcribedText);
+      if (_weatherQ && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
+        try {
+          const _WCITIES = { "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD": [31.78, 35.22], "\u05D7\u05D9\u05E4\u05D4": [32.79, 34.99], "\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2": [31.25, 34.79], "\u05D0\u05D9\u05DC\u05EA": [29.55, 34.95], "\u05E0\u05EA\u05E0\u05D9\u05D4": [32.33, 34.86], "\u05E4\u05EA\u05D7 \u05EA\u05E7\u05D5\u05D5\u05D4": [32.09, 34.89], "\u05D0\u05E9\u05D3\u05D5\u05D3": [31.8, 34.65], "\u05E6\u05E4\u05EA": [32.96, 35.5], "\u05D8\u05D1\u05E8\u05D9\u05D4": [32.79, 35.53], "\u05E8\u05D7\u05D5\u05D1\u05D5\u05EA": [31.9, 34.9], "\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1": [32.08, 34.78] };
+          let _wCity = "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD", _wLat = 31.78, _wLon = 35.22;
+          for (const [_ct, _co] of Object.entries(_WCITIES)) {
+            if (transcribedText.includes(_ct)) { _wCity = _ct; _wLat = _co[0]; _wLon = _co[1]; break; }
+          }
+          const _wres = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${_wLat}&longitude=${_wLon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=2&timezone=Asia%2FJerusalem`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (_wres.ok) {
+            const _wd = await _wres.json();
+            const _cur = _wd.current || {}, _day = _wd.daily || {};
+            const _WCD = { 0: "\u05D1\u05D4\u05D9\u05E8", 1: "\u05D1\u05D4\u05D9\u05E8 \u05D1\u05E8\u05D5\u05D1\u05D5", 2: "\u05DE\u05E2\u05D5\u05E0\u05DF \u05D7\u05DC\u05E7\u05D9\u05EA", 3: "\u05DE\u05E2\u05D5\u05E0\u05DF", 45: "\u05E2\u05E8\u05E4\u05DC", 48: "\u05E2\u05E8\u05E4\u05DC", 51: "\u05D8\u05E4\u05D8\u05D5\u05E3", 53: "\u05D2\u05E9\u05DD \u05E7\u05DC", 55: "\u05D2\u05E9\u05DD \u05E7\u05DC", 61: "\u05D2\u05E9\u05DD \u05E7\u05DC", 63: "\u05D2\u05E9\u05DD", 65: "\u05D2\u05E9\u05DD \u05D7\u05D6\u05E7", 71: "\u05E9\u05DC\u05D2 \u05E7\u05DC", 73: "\u05E9\u05DC\u05D2", 75: "\u05E9\u05DC\u05D2 \u05DB\u05D1\u05D3", 80: "\u05D8\u05D9\u05E4\u05D5\u05EA", 81: "\u05D2\u05E9\u05DE\u05D9\u05DD \u05E7\u05DC\u05D9\u05DD", 82: "\u05D2\u05E9\u05DE\u05D9\u05DD \u05D7\u05D6\u05E7\u05D9\u05DD", 95: "\u05E1\u05D5\u05E4\u05EA \u05E8\u05E2\u05DE\u05D9\u05DD", 96: "\u05E1\u05D5\u05E4\u05EA \u05E8\u05E2\u05DE\u05D9\u05DD", 99: "\u05E1\u05D5\u05E4\u05EA \u05E8\u05E2\u05DE\u05D9\u05DD \u05D7\u05D6\u05E7\u05D4" };
+            const _desc = (c) => _WCD[c] || "";
+            let _wAns = `\u05DE\u05D6\u05D2 \u05D4\u05D0\u05D5\u05D5\u05D9\u05E8 \u05D1${_wCity}: \u05E2\u05DB\u05E9\u05D9\u05D5 ${Math.round(_cur.temperature_2m)} \u05DE\u05E2\u05DC\u05D5\u05EA, ${_desc(_cur.weather_code)}. \u05D4\u05D9\u05D5\u05DD \u05D1\u05D9\u05DF ${Math.round(_day.temperature_2m_min?.[0])} \u05DC${Math.round(_day.temperature_2m_max?.[0])} \u05DE\u05E2\u05DC\u05D5\u05EA`;
+            if (/תח[זס]י/.test(transcribedText)) _wAns += `, \u05D5\u05DE\u05D7\u05E8 \u05D1\u05D9\u05DF ${Math.round(_day.temperature_2m_min?.[1])} \u05DC${Math.round(_day.temperature_2m_max?.[1])} \u05DE\u05E2\u05DC\u05D5\u05EA, ${_desc(_day.weather_code?.[1])}`;
+            _wAns += ".";
+            await saveConvoTurn(env, transcribedText, _wAns);
+            return speak(_wAns);
+          }
+        } catch (_) {
+        }
+      }
+      const _wavesQ = /(?:\u05D2\u05D5\u05D1\u05D4 (?:\u05E9\u05DC )?\u05D4?\u05D2\u05DC\u05D9\u05DD|\u05D4\u05D2\u05DC\u05D9\u05DD \u05D1\u05D9\u05DD|\u05DE\u05D4 \u05D4\u05D2\u05DC\u05D9\u05DD|\u05D0\u05D9\u05DA \u05D4\u05D9\u05DD|\u05D2\u05DC\u05D9\u05DD \u05E1\u05D5\u05E2\u05E8)/.test(transcribedText);
+      if (_wavesQ) {
+        try {
+          const _mres = await fetch("https://marine-api.open-meteo.com/v1/marine?latitude=32.08&longitude=34.78&current=wave_height&timezone=Asia%2FJerusalem", { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (_mres.ok) {
+            const _md = await _mres.json();
+            const _wh = _md?.current?.wave_height;
+            if (_wh !== void 0 && _wh !== null) {
+              const _state = _wh < 0.5 ? "\u05D4\u05D9\u05DD \u05E8\u05D2\u05D5\u05E2 \u05DE\u05D0\u05D5\u05D3" : _wh < 1 ? "\u05D4\u05D9\u05DD \u05E8\u05D2\u05D5\u05E2" : _wh < 1.5 ? "\u05D9\u05DD \u05E1\u05D1\u05D9\u05E8" : "\u05D9\u05DD \u05E1\u05D5\u05E2\u05E8, \u05D6\u05D4\u05D9\u05E8\u05D5\u05EA";
+              const _wvAns = `\u05D2\u05D5\u05D1\u05D4 \u05D4\u05D2\u05DC\u05D9\u05DD \u05D1\u05D7\u05D5\u05E3 \u05EA\u05DC \u05D0\u05D1\u05D9\u05D1 \u05DB\u05E8\u05D2\u05E2 \u05D4\u05D5\u05D0 ${Math.round(_wh * 10) / 10} \u05DE\u05D8\u05E8, ${_state}`;
+              await saveConvoTurn(env, transcribedText, _wvAns);
+              return speak(_wvAns);
+            }
+          }
+        } catch (_) {
+        }
+      }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
       const chatIntent = /(?:גוגל|google|גוגול).{0,20}(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)|(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat).{0,20}(?:גוגל|google|גוגול)|(?:^|[\s,])[בהל]?(?:צ[׳'״"]?[אע][טת]|צ[׳'״"]?[אע]?[טת]|צ[אע][טת]|צ׳?[אע]?[טת]|chat)(?![\u05D0-\u05EA])|איש\s+קשר/i.test(effectiveText);
       const emailIntent = /(?:מייל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
@@ -579,6 +623,33 @@ var worker_default = {
         }
         const isReminder = /(?:ת[י]?[זס]כ[ירו]|ה[זס]כ[רי]|א[זס]כור)/.test(transcribedText);
         if (isReminder && callerPhone && env.USER_MEMORY) {
+          const _fmtRem = async (ph) => {
+            try {
+              const raw = await env.USER_MEMORY.get(`reminder_${ph}`);
+              if (!raw) return null;
+              const r = JSON.parse(raw);
+              const d = new Date(r.fireAt);
+              const loc = new Intl.DateTimeFormat("he-IL", { timeZone: "Asia/Jerusalem", hour: "numeric", minute: "2-digit", hour12: false, weekday: "long" });
+              const parts = loc.formatToParts(d).reduce((acc, p2) => ({ ...acc, [p2.type]: p2.value }), {});
+              const _hh = Number(parts.hour || 8), _mm = Number(parts.minute || 0);
+              const timeWords = hebNumWords(_hh) + (_mm === 0 ? " בדיוק" : " ו" + hebNumWords(_mm) + " דקות");
+              return `${parts.weekday || ""} בשעה ${timeWords}: ${r.message || "תזכורת"}`;
+            } catch (_) { return null; }
+          };
+          if (/(?:מח[קי]|מחיק|מחוק|תמחק|תבטל|בטל)/.test(transcribedText)) {
+            const delKey = `reminder_${callerPhone}`;
+            const had = await env.USER_MEMORY.get(delKey);
+            if (had) {
+              await env.USER_MEMORY.delete(delKey);
+              logEvent("reminder_deleted", { caller: callerTail(callerPhone) });
+              return speak("התזכורת נמחקה בהצלחה");
+            }
+            return speak("אין תזכורות שמורות, אין מה למחוק");
+          }
+          if (/(?:מה (?:הוא |היא )?יגיד|מה יש ב|מה התוכן|מתי (?:תזכיר|אתה מזכיר)|האם יש (?:עוד )?תזכורות|יש עוד תזכורות|אילו תזכורות|כמה תזכורות|מה התזכורות|מה סידרת)/.test(transcribedText) && !/^\s*(?:ת[י]?[זס]כ[יר]|תעשה)/.test(transcribedText)) {
+            const cur = await _fmtRem(callerPhone);
+            return speak(cur ? `יש לך תזכורת אחת, ${cur}. כדי למחוק תגיד מחק תזכורת` : "אין תזכורות שמורות כרגע");
+          }
           const _W = (w) => "(?:^|(?<=[\u05D1\u05DC\u05E9])|[^\u05D0-\u05EA0-9])";
           const _clean = (t) => t.replace(/[.,\s]+$/g, "").replace(/\s+/g, " ").trim() || "תזכורת ממערכת ה-AI";
           const _stripAll = (t) => _clean(t
@@ -1717,7 +1788,7 @@ function effectiveTextIfAny(t) {
 __name(effectiveTextIfAny, "effectiveTextIfAny");
 __name2(effectiveTextIfAny, "effectiveTextIfAny");
 function speak(text) {
-  const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
+  const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/(\d)\.(?=\d)/g, "$1 \u05E0\u05E7\u05D5\u05D3\u05D4 ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
   if (!clean) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
   return textResponse(`id_list_message=t-${clean}`);
 }
