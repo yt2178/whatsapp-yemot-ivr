@@ -288,8 +288,9 @@ var worker_default = {
       const k = url.searchParams.get("k") || "";
       if (!k) return Response.json({ error: "missing k" });
       if (k === "bridge_diag") {
-        const bd = await callBridge(env, { action: "list", max: 1 });
-        return Response.json({ bridge_raw: bd });
+        const acct = url.searchParams.get("bridge") === "2" ? 2 : 1;
+        const bd = await callBridge(env, { action: "list", max: 1 }, acct);
+        return Response.json({ account: acct, bridge_raw: bd });
       }
       const v = url.searchParams.get("v");
       if (v !== null && request.method === "POST") {
@@ -902,9 +903,19 @@ function callerTail(phone) {
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
 __name22(callerTail, "callerTail");
-var BRIDGE_URL = "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec";
-async function callBridge(env, payload) {
-  const res = await fetch(BRIDGE_URL, {
+var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec", 2: "https://script.google.com/macros/s/AKfycbywpyptD-uJQzq9Feqjb6RnEkAyBtO0QrnGTrBtMYO4OAv1qyt_5RiUra2tGscUmVoYHw/exec" };
+function detectAccount(text) {
+  const t = String(text || "").replace(/\s+/g, " ");
+  if (/(?:חשבון|תיבה)\s*(?:ה)?(?:שניים|שניה|שני|שתיים|2)/.test(t)) return 2;
+  if (/(?:חשבון|תיבה)\s*(?:ה)?(?:ראשון|ראשונה|אחד|אחת|1)/.test(t)) return 1;
+  return null;
+}
+async function askAccount(env, callerPhone, service, originalRequest) {
+  await setContState(env, callerPhone, { kind: "account", service: String(service || "email"), originalRequest: String(originalRequest || ""), question: "מאיזה חשבון", ts: Date.now() });
+  return speak("באיזה חשבון לבצע את הפעולה? אמור חשבון ראשון או חשבון שני");
+}
+async function callBridge(env, payload, account) {
+  const res = await fetch(BRIDGE_URLS[account === 2 ? 2 : 1], {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, auth: env.GMAIL_BRIDGE_SECRET || "" })
@@ -1127,6 +1138,12 @@ function resolveContinuation(cont, reply, allContacts) {
   const text = String(reply || "").trim();
   const words = text.split(/\s+/).filter(Boolean).length;
   if (/(?:\u05D1\u05D8\u05DC|\u05D1\u05D8\u05D5\u05DC|\u05E2\u05D6\u05D5\u05D1|\u05E9\u05DB\u05D7 \u05DE\u05D6\u05D4|\u05E9\u05DB\u05D7\u05D9 \u05DE\u05D6\u05D4|\u05DC\u05D0 \u05DE\u05E9\u05E0\u05D4|\u05DB\u05DC\u05D5\u05DD|\u05EA\u05E9\u05DB\u05D7)/.test(text) && words <= 4) return { status: "cancel" };
+  if (cont.kind === "account") {
+    if (/(?:^|\s)(?:שתיים|שני|השני|שניה|2)(?:\s|$)/.test(text)) return { status: "resolved", account: 2 };
+    if (/(?:^|\s)(?:אחד|אחת|ראשון|הראשון|1)(?:\s|$)/.test(text)) return { status: "resolved", account: 1 };
+    if (words > 6 || /(?:שלח|מייל|צאט|תשלח)/.test(text)) return { status: "newcommand" };
+    return { status: "reask" };
+  }
   if (cont.kind === "currency") {
     const cur = findCurrency(text);
     if (cur) return { status: "resolved", currency: cur };
@@ -1195,16 +1212,16 @@ function euroRateText(rate) {
 __name(euroRateText, "euroRateText");
 __name2(euroRateText, "euroRateText");
 __name22(euroRateText, "euroRateText");
-async function chatSendConfirm(env, callerPhone, to, toName, text, prefixNote) {
+async function chatSendConfirm(env, callerPhone, to, toName, text, prefixNote, account = 1) {
   logEvent("chat_send_pending_confirm", { caller: callerTail(callerPhone) });
-  return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text: text || "", name: toName || "" }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC ${speakAddress(to)} \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 ${text || ""}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
+  return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text: text || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC ${speakAddress(to)} \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 ${text || ""}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
 }
 __name(chatSendConfirm, "chatSendConfirm");
 __name2(chatSendConfirm, "chatSendConfirm");
 __name22(chatSendConfirm, "chatSendConfirm");
-async function emailSendConfirm(env, callerPhone, to, toName, subject, body, prefixNote) {
+async function emailSendConfirm(env, callerPhone, to, toName, subject, body, prefixNote, account = 1) {
   logEvent("email_send_pending_confirm", { caller: callerTail(callerPhone) });
-  return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: subject || "", body: body || "", name: toName || "" }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05DC ${speakAddress(to)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0"}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
+  return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: subject || "", body: body || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05DC ${speakAddress(to)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0"}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
 }
 __name(emailSendConfirm, "emailSendConfirm");
 __name2(emailSendConfirm, "emailSendConfirm");
@@ -1233,17 +1250,23 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
       }
       return speak("\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E7\u05D1\u05DC \u05DB\u05E8\u05D2\u05E2 \u05D0\u05EA \u05E9\u05E2\u05E8 \u05D4\u05DE\u05D8\u05D1\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2");
     }
+    if (cont.kind === "account" && res.account) {
+      await clearContState(env, callerPhone);
+      logEvent("cont_account_resolved", { account: res.account, service: String(cont.service || "").slice(0, 8), caller: callerTail(callerPhone) });
+      if (cont.service === "chat") return await handleGoogleChat(env, env.GROQ_KEY || "", cont.originalRequest || "", callerPhone, requestId, res.account);
+      return await handleEmail(env, env.GROQ_KEY || "", cont.originalRequest || "", callerPhone, requestId, res.account);
+    }
     if (cont.kind === "contact" && res.contact) {
       const contact = res.contact;
       if (cont.action === "chat_send") {
         await clearContState(env, callerPhone);
         logEvent("cont_contact_resolved", { channel: "chat", caller: callerTail(callerPhone) });
-        return await chatSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.text) || "", "");
+        return await chatSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.text) || "", "", (cont.payload && cont.payload.account) || 1);
       }
       if (cont.action === "email_send") {
         await clearContState(env, callerPhone);
         logEvent("cont_contact_resolved", { channel: "email", caller: callerTail(callerPhone) });
-        return await emailSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.subject) || "", (cont.payload && cont.payload.body) || "", "");
+        return await emailSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.subject) || "", (cont.payload && cont.payload.body) || "", "", (cont.payload && cont.payload.account) || 1);
       }
     }
     await clearContState(env, callerPhone);
@@ -1487,8 +1510,9 @@ async function routeCommunication(env, GROQ_KEY, transcribedText, callerPhone, r
   } catch (_) {
   }
   logEvent("communication_routed", { service: String(service).slice(0, 12), caller: callerTail(callerPhone) });
-  if (service === "email") return await handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId);
-  if (service === "chat") return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId);
+  const _acct = detectAccount(transcribedText);
+  if (service === "email") return await handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId, _acct);
+  if (service === "chat") return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId, _acct);
   await saveConvoTurn(env, transcribedText, "\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8");
   return speak("\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8. \u05D0\u05DE\u05D5\u05E8 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8 \u05D1\u05EA\u05D7\u05D9\u05DC\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4");
 }
@@ -1524,14 +1548,14 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
     }
     logEvent("action_confirmed", { kind: String(pend.kind || "?").slice(0, 12), caller: callerTail(callerPhone) });
     if (pend.kind === "email") {
-      const data = await callBridge(env, { action: "send", to: pend.to, subject: pend.subject || "", body: pend.body || "הודעה מהקו הטלפוני", inReplyTo: pend.inReplyTo, threadId: pend.threadId, requestId: "confirm" });
+      const data = await callBridge(env, { action: "send", to: pend.to, subject: pend.subject || "", body: pend.body || "הודעה מהקו הטלפוני", inReplyTo: pend.inReplyTo, threadId: pend.threadId, requestId: "confirm" }, pend.account || 1);
       logEvent("email_send", { ok: Boolean(data.ok), confirmed: true });
       if (!data.ok) return speak("שליחת המייל נכשלה, נסה שוב");
       await setLastTarget(env, callerPhone, pend.name || "", pend.to, "email");
       return speak("המייל נשלח בהצלחה");
     }
     if (pend.kind === "chat") {
-      const data = await callBridge(env, { action: "chat_send_text", to: pend.to, text: pend.text || "", requestId: "confirm" });
+      const data = await callBridge(env, { action: "chat_send_text", to: pend.to, text: pend.text || "", requestId: "confirm" }, pend.account || 1);
       logEvent("chat_send", { ok: Boolean(data.ok), confirmed: true });
       if (!data.ok) return speak("שליחת הודעת הצאט נכשלה");
       await setLastTarget(env, callerPhone, pend.name || "", pend.to, "chat");
@@ -1546,7 +1570,7 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
 __name(handleConfirm, "handleConfirm");
 __name2(handleConfirm, "handleConfirm");
 __name22(handleConfirm, "handleConfirm");
-async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId) {
+async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId, account = null) {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) {
       return speak("הגישה הטלפונית למייל עדיין בהגדרה, אין כרגע אפשרות לקרוא או לשלוח מיילים בטלפון");
@@ -1574,33 +1598,36 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     logEvent("email_intent", { action: String(plan.action).slice(0, 20), caller: callerTail(callerPhone) });
     const listKey = "lastlist_" + callerPhone;
     if (plan.action === "list" || plan.action === "summarize" || plan.action === "search") {
+      if (!account) return await askAccount(env, callerPhone, "email", transcribedText);
       const payload = plan.action === "search" ? { action: "search", query: p.query || "", max: parseInt(p.count) || 5 } : { action: "list", max: Math.min(parseInt(p.count) || 5, 10) };
-      const data = await callBridge(env, payload);
+      const data = await callBridge(env, payload, account);
       if (!data.ok) {
         logEvent("email_bridge_failed", { action: plan.action });
         return speak("אין עדיין חיבור פעל למייל, יש להשלים את אישור ההרשאה");
       }
       const msgs = data.messages || [];
-      await kvSetList(env, listKey, { messages: msgs, ts: Date.now() });
+      await kvSetList(env, listKey, { messages: msgs, ts: Date.now(), account });
       if (plan.action === "summarize") {
         const digest = msgs.map((m, i) => `${i + 1}. מאת ${cleanFromName(m.from)}, נושא ${m.subject}: ${m.snippet || ""}`).join("\n");
         if (!digest) return speak("אין מיילים לסיכום");
         const ans = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית בטלפון. סכם את רשימת המיילים הבאה בעברית ברורה וקצרה, מקסימום 5 משפטים. אל תשתמש בנקודות או במקפים בתשובה.", digest, 300);
         return speak(ans || fmtEmailList(msgs));
       }
-      return speak(fmtEmailList(msgs));
+      const _lbl = account === 2 ? "בחשבון השני, " : "";
+      return speak(_lbl + fmtEmailList(msgs));
     }
     if (plan.action === "read") {
       const list = await kvGetList(env, listKey);
       const idx = (parseInt(p.index) || 1) - 1;
       if (!list || !list.messages || !list.messages[idx]) return speak("אין רשימת מיילים פעילה, בקש קודם את רשימת המיילים האחרונים");
       const item = list.messages[idx];
-      const data = await callBridge(env, { action: "get", id: item.id });
+      const data = await callBridge(env, { action: "get", id: item.id }, list.account || account || 1);
       if (!data.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
       const ans = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית בטלפון. הקרא את המייל הבא בעברית טבעית וברורה, מקסימום 6 משפטים, בלי נקודות ובלי מקפים. מאת " + cleanFromName(data.from) + ", בנושא " + (data.subject || "ללא נושא") + ", והתוכן הוא: " + (data.body || "").slice(0, 1800), "הקרא את המייל", 450);
       return speak(ans || "לא הצלחתי להקריא את המייל");
     }
     if (plan.action === "send") {
+      if (!account) return await askAccount(env, callerPhone, "email", transcribedText);
       const rawTo = String(p.to || "").trim();
       const hasAddress = rawTo.includes("@") || rawTo.includes("\u05E9\u05D8\u05E8\u05D5\u05D3\u05DC");
       let to = "", toName = "", resolveNote = "";
@@ -1626,7 +1653,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
             toName = matches[0].name;
           } else if (matches.length > 1) {
             const question = contQuestionFor(matches);
-            await setContState(env, callerPhone, { kind: "contact", action: "email_send", payload: { subject: p.subject || "", body: p.body || "" }, candidates: slimCandidates(matches), originalRequest: transcribedText, question, ts: Date.now() });
+            await setContState(env, callerPhone, { kind: "contact", action: "email_send", payload: { subject: p.subject || "", body: p.body || "", account }, candidates: slimCandidates(matches), originalRequest: transcribedText, question, ts: Date.now() });
             logEvent("email_contact_clarify", { count: matches.length, caller: callerTail(callerPhone) });
             return speak(question);
           } else {
@@ -1647,25 +1674,26 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         }
       }
       if (!to.includes("@") || !(to.split("@")[1] || "").includes(".")) return speak("\u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05D7\u05E1\u05E8\u05D4 \u05E1\u05D9\u05D5\u05DE\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05D9\u05E8\u05D5\u05EA");
-      return await emailSendConfirm(env, callerPhone, to, toName, p.subject || "", p.body || "", resolveNote);
+      return await emailSendConfirm(env, callerPhone, to, toName, p.subject || "", p.body || "", resolveNote, account);
     }
     if (plan.action === "reply" || plan.action === "forward") {
       const list = await kvGetList(env, listKey);
       const idx = (parseInt(p.index) || 1) - 1;
       if (!list || !list.messages || !list.messages[idx]) return speak("אין רשימת מיילים פעילה, בקש קודם את רשימת המיילים");
+      const _acct = list.account || account || 1;
       const item = list.messages[idx];
-      const data = await callBridge(env, { action: "get", id: item.id });
+      const data = await callBridge(env, { action: "get", id: item.id }, _acct);
       if (!data.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
       if (plan.action === "reply") {
         const subj = (data.subject || "").startsWith("Re:") ? data.subject : "Re: " + (data.subject || "");
         logEvent("email_reply_pending_confirm", { caller: callerTail(callerPhone) });
-        return await pendingConfirmRead(env, callerPhone, { kind: "email", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId, name: cleanFromName(data.from) }, `לענות למייל מאת ${cleanFromName(data.from)}, בנושא ${data.subject || ""}, עם התוכן ${p.body || "ריק"}? לאישור הקש אחת, לביטול הקש שתיים`);
+        return await pendingConfirmRead(env, callerPhone, { kind: "email", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId, name: cleanFromName(data.from), account: _acct }, `לענות למייל מאת ${cleanFromName(data.from)}, בנושא ${data.subject || ""}, עם התוכן ${p.body || "ריק"}? לאישור הקש אחת, לביטול הקש שתיים`);
       }
       const to = normalizeAddress(p.to);
       if (!to.includes("@") || !to.split("@")[1]) return speak("אמור שוב את כתובת ההעברה, כולל שטרודל");
       const fwdBody = "הודעה שהועברה אליך:\n" + (data.body || "").slice(0, 3e3);
       logEvent("email_forward_pending_confirm", { caller: callerTail(callerPhone) });
-      return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "העברה של " + (data.subject || "מייל"), body: fwdBody }, `להעביר את המייל בנושא ${data.subject || ""} אל ${to}? לאישור הקש אחת, לביטול הקש שתיים`);
+      return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "העברה של " + (data.subject || "מייל"), body: fwdBody, account: _acct }, `להעביר את המייל בנושא ${data.subject || ""} אל ${to}? לאישור הקש אחת, לביטול הקש שתיים`);
     }
     return speak("לא הבנתי את בקשת המייל");
   } catch (e) {
@@ -1683,7 +1711,7 @@ function fmtChatList(messages) {
 }
 __name(fmtChatList, "fmtChatList");
 __name2(fmtChatList, "fmtChatList");
-__name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId = "") {
+__name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId = "", account = null) {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
@@ -1708,22 +1736,24 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       return saved ? speak(`איש הקשר ${name} נשמר בהצלחה`) : speak("לא הצלחתי לשמור את איש הקשר");
     }
     if (plan.action === "unread" || plan.action === "search") {
+      if (!account) return await askAccount(env, callerPhone, "chat", transcribedText);
       const payload = plan.action === "search" ? { action: "chat_search", query: params.query || "", max: Math.min(parseInt(params.count) || 5, 10) } : { action: "chat_unread", max: Math.min(parseInt(params.count) || 5, 10) };
-      const data = await callBridge(env, payload);
+      const data = await callBridge(env, payload, account);
       if (!data.ok) return speak("לא הצלחתי כרגע לקרוא את הודעות הצאט");
-      await kvSetList(env, listKey, { messages: data.messages || [], ts: Date.now() });
+      await kvSetList(env, listKey, { messages: data.messages || [], ts: Date.now(), account });
       return speak(fmtChatList(data.messages || []));
     }
     if (plan.action === "read") {
       const list = await kvGetList(env, listKey);
       const item = list?.messages?.[(parseInt(params.index) || 1) - 1];
       if (!item) return speak("אין רשימת הודעות צאט פעילה, בקש קודם הודעות חדשות");
-      const data = await callBridge(env, { action: "chat_get", name: item.name });
+      const data = await callBridge(env, { action: "chat_get", name: item.name }, list?.account || account || 1);
       if (!data.ok) return speak("לא הצלחתי לפתוח את הודעת הצאט");
       const answer = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית. הקרא את הודעת הצאט בקצרה ובצורה ברורה, עד ארבעה משפטים.", `מאת ${data.message?.sender || "שולח לא ידוע"}. תוכן: ${data.message?.text || "ללא טקסט"}`, 350);
       return speak(answer || "לא הצלחתי להקריא את ההודעה");
     }
     if (plan.action === "send_text") {
+      if (!account) return await askAccount(env, callerPhone, "chat", transcribedText);
       const rawTo = String(params.to || "").trim();
       const text = String(params.text || "").trim();
       if (!text) return speak("לא שמעתי את תוכן ההודעה");
@@ -1750,7 +1780,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
             toName = matches[0].name;
           } else if (matches.length > 1) {
             const question = contQuestionFor(matches);
-            await setContState(env, callerPhone, { kind: "contact", action: "chat_send", payload: { text }, candidates: slimCandidates(matches), originalRequest: transcribedText, question, ts: Date.now() });
+            await setContState(env, callerPhone, { kind: "contact", action: "chat_send", payload: { text, account }, candidates: slimCandidates(matches), originalRequest: transcribedText, question, ts: Date.now() });
             logEvent("chat_contact_clarify", { count: matches.length, caller: callerTail(callerPhone) });
             return speak(question);
           } else {
@@ -1771,7 +1801,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
         }
       }
       if (!to || !to.includes("@") || !(to.split("@")[1] || "").includes(".")) return speak("\u05D0\u05DE\u05D5\u05E8 \u05E9\u05D5\u05D1 \u05D0\u05EA \u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05E9\u05DC \u05D4\u05E0\u05DE\u05E2\u05DF, \u05DB\u05D5\u05DC\u05DC \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4");
-      return await chatSendConfirm(env, callerPhone, to, toName, text, prefixNote);
+      return await chatSendConfirm(env, callerPhone, to, toName, text, prefixNote, account);
     }
     return speak("אפשר לשאול אם יש הודעות צאט חדשות, לבקש לקרוא הודעה, לחפש הודעה, או לשלוח הודעה מתומללת");
   } catch (error) {
