@@ -849,6 +849,25 @@ var worker_default = {
       const isShortReply = transcribedText.split(/\s+/).filter(Boolean).length <= 4;
       const clockGlued = transcribedText.replace(/\s+/g, "");
       const clockFast = (/(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(transcribedText) || /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(clockGlued)) && !/(?:מייל|אימייל|צאט|שלח|תשלח|שלוח|תעביר|דולר|אירו|יורו|מזג|ביטקוין|ביקוד|קריפטו)/.test(transcribedText);
+      const extTitleCmd = (() => {
+        if (!/(?:כותרת)/.test(transcribedText)) return null;
+        if (!/(?:שנ[הי]|תשנ[הי]|עדכ[נן]|תעדכ[נן])/.test(transcribedText)) return null;
+        if (!/(?:שלוח[הת])/.test(transcribedText)) return null;
+        let n = 0;
+        const mDig = transcribedText.match(/שלוח[הת][^0-9]{0,12}([1-8])/);
+        if (mDig) n = parseInt(mDig[1], 10);
+        if (!n) {
+          const mW = transcribedText.match(/שלוח[הת]\s+(?:מספר\s+)?(אחת|אחד|שתיים|שניים|שלוש|ארבע|חמש|שש|שישה|שבע|שמונה)/);
+          const NW = { "אחת": 1, "אחד": 1, "שתיים": 2, "שניים": 2, "שלוש": 3, "ארבע": 4, "חמש": 5, "שש": 6, "שישה": 6, "שבע": 7, "שמונה": 8 };
+          if (mW) n = NW[mW[1]] || 0;
+        }
+        return n || null;
+      })();
+      if (extTitleCmd) {
+        await setContState(env, callerPhone, { kind: "exttitle", payload: { ext: extTitleCmd }, question: "מה תהיה הכותרת החדשה?", ts: Date.now() });
+        logEvent("ext_title_ask", { ext: extTitleCmd, caller: callerTail(callerPhone) });
+        return openQuestion("מה תהיה הכותרת החדשה של שלוחה " + ["", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה"][extTitleCmd] + "?");
+      }
       const lineInfoRes = await maybeLineInfo(env, transcribedText);
       if (lineInfoRes) {
         logEvent("line_info", {});
@@ -1850,6 +1869,10 @@ function resolveContinuation(cont, reply, allContacts) {
   }
   const sendQ = /(?:\u05E9\u05DC\u05D7|\u05EA\u05E9\u05DC\u05D7|\u05E9\u05DC\u05D5\u05D7|\u05E9\u05DC\u05D9\u05D7\u05D4|\u05D4\u05E2\u05D1\u05E8|\u05EA\u05E2\u05D1\u05D9\u05E8|\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA|\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD|\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8)/.test(text);
   const rateQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2|\u05D3\u05D5\u05DC\u05E8|\u05D0\u05D9\u05E8\u05D5|\u05D9\u05D5\u05E8\u05D5|\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF)/.test(text);
+  if (cont.kind === "maildraft" || cont.kind === "chatdraft" || cont.kind === "exttitle") {
+    if (!text) return { status: "reask" };
+    return { status: "resolved", answer: text };
+  }
   if (words > 6 || clockQ || sendQ || (cont.kind === "contact" && rateQ)) return { status: "newcommand" };
   return { status: "reask" };
 }
@@ -1904,6 +1927,37 @@ async function chatSendConfirm(env, callerPhone, to, toName, text, prefixNote, a
 __name(chatSendConfirm, "chatSendConfirm");
 __name2(chatSendConfirm, "chatSendConfirm");
 __name22(chatSendConfirm, "chatSendConfirm");
+async function mailDraftNext(env, callerPhone, to, toName, subject, body, account, prefixNote) {
+  subject = String(subject || "").trim();
+  body = String(body || "").trim();
+  if (!subject) {
+    await setContState(env, callerPhone, { kind: "maildraft", payload: { to, toName, subject: "", body: "", account: account || 1 }, question: "מה יהיה נושא המייל?", ts: Date.now() });
+    logEvent("mail_draft_ask", { slot: "subject", caller: callerTail(callerPhone) });
+    return openQuestion("מה יהיה נושא המייל?");
+  }
+  if (!body) {
+    await setContState(env, callerPhone, { kind: "maildraft", payload: { to, toName, subject, body: "", account: account || 1 }, question: "ומה יהיה תוכן המייל?", ts: Date.now() });
+    logEvent("mail_draft_ask", { slot: "body", caller: callerTail(callerPhone) });
+    return openQuestion("ומה יהיה תוכן המייל?");
+  }
+  return await emailSendConfirm(env, callerPhone, to, toName, subject, body, prefixNote || "", account || 1);
+}
+__name(mailDraftNext, "mailDraftNext");
+__name2(mailDraftNext, "mailDraftNext");
+__name22(mailDraftNext, "mailDraftNext");
+async function chatDraftNext(env, callerPhone, to, toName, text, account, prefixNote) {
+  text = String(text || "").trim();
+  if (!text) {
+    await setContState(env, callerPhone, { kind: "chatdraft", payload: { to, toName, account: account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+    logEvent("chat_draft_ask", { caller: callerTail(callerPhone) });
+    return openQuestion("מה לכתוב בהודעה?");
+  }
+  return await chatSendConfirm(env, callerPhone, to, toName, text, prefixNote || "", account);
+}
+__name(chatDraftNext, "chatDraftNext");
+__name2(chatDraftNext, "chatDraftNext");
+__name22(chatDraftNext, "chatDraftNext");
+
 async function emailSendConfirm(env, callerPhone, to, toName, subject, body, prefixNote, account = 1) {
   logEvent("email_send_pending_confirm", { caller: callerTail(callerPhone), to: String(to || "").slice(0, 40) });
   return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: subject || "", body: body || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05DC ${speakAddress(to)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0"}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
@@ -1913,6 +1967,71 @@ __name2(emailSendConfirm, "emailSendConfirm");
 __name22(emailSendConfirm, "emailSendConfirm");
 async function executeContinuation(env, cont, res, callerPhone, requestId) {
   try {
+    if (cont.kind === "chatdraft") {
+      await clearContState(env, callerPhone);
+      const pl = cont.payload || {};
+      const ans = String(res.answer || "").trim();
+      if (!ans) return speak("לא שמעתי, נסה שוב");
+      if (!pl.to) {
+        const contacts = await getContacts(env, callerPhone);
+        const matches = findContactMatches(contacts, ans);
+        if (matches.length === 1) {
+          await setContState(env, callerPhone, { kind: "chatdraft", payload: { to: matches[0].address, toName: matches[0].name, account: pl.account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+          return openQuestion("מה לכתוב בהודעה?");
+        }
+        const ag = normalizeAddress(ans);
+        if (ag.includes("@") && (ag.split("@")[1] || "").includes(".")) {
+          await setContState(env, callerPhone, { kind: "chatdraft", payload: { to: ag, toName: "", account: pl.account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+          return openQuestion("מה לכתוב בהודעה?");
+        }
+        return speak("לא מצאתי את הנמען, אמור שם איש קשר שמור או כתובת מלאה ונסה שוב");
+      }
+      logEvent("cont_draft_done", { channel: "chat" });
+      return await chatSendConfirm(env, callerPhone, pl.to, pl.toName || "", ans, "", pl.account || 1);
+    }
+    if (cont.kind === "maildraft") {
+      await clearContState(env, callerPhone);
+      const pl = cont.payload || {};
+      const ans = String(res.answer || "").trim();
+      if (!ans) return speak("לא שמעתי, נסה שוב");
+      let to = String(pl.to || ""), toName = String(pl.toName || ""), subject = String(pl.subject || ""), body = String(pl.body || ""), account = pl.account || 1;
+      if (!to) {
+        const contacts = await getContacts(env, callerPhone);
+        const matches = findContactMatches(contacts, ans);
+        if (matches.length === 1) {
+          to = matches[0].address;
+          toName = matches[0].name;
+        } else if (matches.length > 1) {
+          const question = contQuestionFor(matches);
+          await setContState(env, callerPhone, { kind: "contact", action: "email_send", payload: { subject, body, account }, candidates: slimCandidates(matches), question, ts: Date.now() });
+          return speak(question);
+        } else {
+          const fz = findFuzzyContact(contacts, ans);
+          if (fz) {
+            to = fz.address;
+            toName = fz.name;
+          } else {
+            const ag = normalizeAddress(ans);
+            if (ag.includes("@") && (ag.split("@")[1] || "").includes(".")) to = ag;
+            else return speak("לא מצאתי את הנמען, אמור שם איש קשר שמור או כתובת מלאה עם שטרודל ונקודה, ונסה שוב");
+          }
+        }
+        logEvent("cont_draft_recipient", { channel: "email" });
+        return await mailDraftNext(env, callerPhone, to, toName, subject, body, account, "");
+      }
+      if (!subject) return await mailDraftNext(env, callerPhone, to, toName, ans, body, account, "");
+      logEvent("cont_draft_done", { channel: "email" });
+      return await emailSendConfirm(env, callerPhone, to, toName, subject, ans, "", account);
+    }
+    if (cont.kind === "exttitle") {
+      await clearContState(env, callerPhone);
+      const ans = String(res.answer || "").trim();
+      if (!ans) return speak("לא שמעתי, נסה שוב");
+      const ext = (cont.payload && cont.payload.ext) || 0;
+      const hebrewNum = ["", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה"][ext] || ext;
+      logEvent("ext_title_confirm", { ext });
+      return await pendingConfirmRead(env, callerPhone, { kind: "exttitle", ext, title: ans }, `לשנות את הכותרת של שלוחה ${hebrewNum} ל: ${ans}? לאישור הקש אחת, לביטול הקש שתיים`);
+    }
     if (cont.kind === "currency" && res.currency) {
       let msg = "";
       if (res.currency === "usd") {
@@ -1945,12 +2064,17 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
       if (cont.action === "chat_send") {
         await clearContState(env, callerPhone);
         logEvent("cont_contact_resolved", { channel: "chat", caller: callerTail(callerPhone) });
-        return await chatSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.text) || "", "", (cont.payload && cont.payload.account) || 1);
+        const cTxt = String((cont.payload && cont.payload.text) || "").trim();
+        if (!cTxt) {
+          await setContState(env, callerPhone, { kind: "chatdraft", payload: { to: contact.address, toName: contact.name, account: (cont.payload && cont.payload.account) || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+          return openQuestion("מה לכתוב בהודעה?");
+        }
+        return await chatSendConfirm(env, callerPhone, contact.address, contact.name, cTxt, "", (cont.payload && cont.payload.account) || 1);
       }
       if (cont.action === "email_send") {
         await clearContState(env, callerPhone);
         logEvent("cont_contact_resolved", { channel: "email", caller: callerTail(callerPhone) });
-        return await emailSendConfirm(env, callerPhone, contact.address, contact.name, (cont.payload && cont.payload.subject) || "", (cont.payload && cont.payload.body) || "", "", (cont.payload && cont.payload.account) || 1);
+        return await mailDraftNext(env, callerPhone, contact.address, contact.name, String((cont.payload && cont.payload.subject) || "").trim(), String((cont.payload && cont.payload.body) || "").trim(), (cont.payload && cont.payload.account) || 1, "");
       }
     }
     await clearContState(env, callerPhone);
@@ -2272,6 +2396,24 @@ __name22(pendingConfirmRead, "pendingConfirmRead");async function handleConfirm(
       await setLastTarget(env, callerPhone, pend.name || "", pend.to, "chat");
       return speak("הודעת הצאט נשלחה בהצלחה");
     }
+    if (pend.kind === "exttitle") {
+      try {
+        const d = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + pend.ext + "/ext.ini", { headers: { "User-Agent": "Mozilla/5.0" } });
+        if (!d.ok) return speak("לא הצלחתי לפתוח את הגדרות השלוחה");
+        let ini = await d.text();
+        const title = String(pend.title || "").replace(/[\r\n=]/g, " ").trim();
+        ini = /^title=/m.test(ini) ? ini.replace(/^title=.*$/m, "title=" + title) : ini.replace(/\s*$/, "\ntitle=" + title);
+        const fd2 = new FormData();
+        fd2.append("file", new Blob([ini], { type: "text/plain" }), "ext.ini");
+        const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + env.YEMOT_TOKEN + "&path=ivr/" + pend.ext + "/ext.ini", { method: "POST", body: fd2 });
+        const upD = await up.json().catch(() => null);
+        if (!upD || upD.responseStatus !== "OK") return speak("העדכון נכשל, נסה שוב");
+        return speak("הכותרת של שלוחה " + pend.ext + " עודכנה בהצלחה");
+      } catch (e) {
+        logEvent("ext_title_error", { type: e?.name || "Error" });
+        return speak("יש תקלה בעדכון השלוחה, נסה שוב");
+      }
+    }
     return speak("אין פעולה ממתינה לאישור");
   } catch (e) {
     logEvent("confirm_error", { type: e?.name || "Error" });
@@ -2415,7 +2557,11 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         if (hasAddress) {
           to = normalizeAddress(rawTo);
         } else {
-          if (!rawTo) return speak("\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05DC\u05DE\u05D9 \u05DC\u05E9\u05DC\u05D5\u05D7 \u05D0\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC. \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05E9\u05DD \u05D0\u05D9\u05E9 \u05D4\u05E7\u05E9\u05E8 \u05D0\u05D5 \u05D0\u05EA \u05D4\u05DB\u05EA\u05D5\u05D1\u05EA");
+          if (!rawTo) {
+            await setContState(env, callerPhone, { kind: "maildraft", payload: { to: "", toName: "", subject: String(p.subject || "").trim(), body: String(p.body || "").trim(), account: account || 1 }, question: "למי לשלוח את המייל? אמור שם איש קשר או כתובת מלאה", ts: Date.now() });
+            logEvent("mail_draft_ask", { slot: "to", caller: callerTail(callerPhone) });
+            return openQuestion("למי לשלוח את המייל? אמור שם איש קשר או כתובת מלאה");
+          }
           const contacts = await getContacts(env, callerPhone);
           const matches = findContactMatches(contacts, rawTo);
           if (matches.length === 1) {
@@ -2444,7 +2590,10 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         }
       }
       if (!to.includes("@") || !(to.split("@")[1] || "").includes(".")) return speak("\u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05D7\u05E1\u05E8\u05D4 \u05E1\u05D9\u05D5\u05DE\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05D9\u05E8\u05D5\u05EA");
-      return await emailSendConfirm(env, callerPhone, to, toName, p.subject || "", p.body || "", resolveNote, account);
+      const draftSubj = String(p.subject || "").trim();
+      const draftBody = String(p.body || "").trim();
+      if (!draftSubj || !draftBody) return await mailDraftNext(env, callerPhone, to, toName, draftSubj, draftBody, account, resolveNote);
+      return await emailSendConfirm(env, callerPhone, to, toName, draftSubj, draftBody, resolveNote, account);
     }
     if (plan.action === "reply" || plan.action === "forward") {
       const list = await kvGetList(env, listKey);
@@ -2532,7 +2681,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "שליחה");
       const rawTo = String(params.to || "").trim();
       const text = String(params.text || "").trim();
-      if (!text) return speak("לא שמעתי את תוכן ההודעה");
+
       const hasAddress = rawTo.includes("@") || rawTo.includes("\u05E9\u05D8\u05E8\u05D5\u05D3\u05DC");
       let to = "", toName = "", prefixNote = "";
       if (!hasAddress && isPronounRef(rawTo)) {
@@ -2577,6 +2726,11 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
         }
       }
       if (!to || !to.includes("@") || !(to.split("@")[1] || "").includes(".")) return speak("\u05D0\u05DE\u05D5\u05E8 \u05E9\u05D5\u05D1 \u05D0\u05EA \u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05D9\u05D9\u05DC \u05E9\u05DC \u05D4\u05E0\u05DE\u05E2\u05DF, \u05DB\u05D5\u05DC\u05DC \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC \u05D5\u05E0\u05E7\u05D5\u05D3\u05D4");
+      if (!text) {
+        await setContState(env, callerPhone, { kind: "chatdraft", payload: { to, toName, account: account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+        logEvent("chat_draft_ask", { caller: callerTail(callerPhone) });
+        return openQuestion("מה לכתוב בהודעה?");
+      }
       return await chatSendConfirm(env, callerPhone, to, toName, text, prefixNote, account);
     }
     return speak("אפשר לשאול אם יש הודעות צאט חדשות, לבקש לקרוא הודעה, לחפש הודעה, או לשלוח הודעה מתומללת");
