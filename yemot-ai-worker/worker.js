@@ -849,6 +849,11 @@ var worker_default = {
       const isShortReply = transcribedText.split(/\s+/).filter(Boolean).length <= 4;
       const clockGlued = transcribedText.replace(/\s+/g, "");
       const clockFast = (/(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(transcribedText) || /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(clockGlued)) && !/(?:מייל|אימייל|צאט|שלח|תשלח|שלוח|תעביר|דולר|אירו|יורו|מזג|ביטקוין|ביקוד|קריפטו)/.test(transcribedText);
+      const lineInfoRes = await maybeLineInfo(env, transcribedText);
+      if (lineInfoRes) {
+        logEvent("line_info", {});
+        return textResponse(lineInfoRes);
+      }
       if (clockFast) {
         const WORLD_TZ = [
           { tz: "America/New_York", names: ["\u05E0\u05D9\u05D5 \u05D9\u05D5\u05E8\u05E7", "\u05D5\u05D5\u05E9\u05D9\u05E0\u05D2\u05D8\u05D5\u05DF", "\u05DE\u05D9\u05D0\u05DE\u05D9", "\u05E4\u05D9\u05DC\u05D3\u05DC\u05E4\u05D9\u05D4"] },
@@ -2974,6 +2979,46 @@ __name(makeDocx, "makeDocx");
 __name2(makeDocx, "makeDocx");
 __name22(makeDocx, "makeDocx");
 
+// ===== מידע חי על שלוחות הקו =====
+const LINE_EXT_DESC = { 1: "הודעות חדשות מהוואטסאפ. בזמן האזנה, הקשה על שבע מעבירה את ההודעה המושמעת לתמלול באיכות גבוהה", 2: "הקלטת הודעת שמע או שליחת הודעת טקסט לוואטסאפ", 3: "העוזר החכם. שאלות, מיילים, צאטים, תזכורות, מזג אוויר ומטבעות בדיבור חופשי", 4: "כל היסטוריית ההודעות מהוואטסאפ. גם כאן, הקשה על שבע בזמן האזנה מעבירה את ההודעה לתמלול באיכות גבוהה", 5: "איפוס תיקיית ההודעות החדשות, כדי שלא יושמעו שוב", 6: "הרשמה לצינתוק, שיחת חינם שמודיעה על הודעות פרטיות חדשות", 7: "הקלטה ותמלול רגיל. הקלטה מהטלפון או העלאת קובץ, והתמלול מגיע למייל ולאתר האישי", 8: "תמלול באיכות גבוהה. הקלטה ישירה במקש אחת, או העברת קובץ שמע לתיקיית ההשלפה בשלוחה שמונה, והתמלול המוקפד מגיע למייל בקובץ וורד" };
+__name(LINE_EXT_DESC, "LINE_EXT_DESC");
+__name2(LINE_EXT_DESC, "LINE_EXT_DESC");
+__name22(LINE_EXT_DESC, "LINE_EXT_DESC");
+async function maybeLineInfo(env, text) {
+  const t = String(text || "");
+  const hasLine = /(?:שלוח[הת]|מה יש בקו|הקו שלי|התפריט|איזה שלוחות|על הקו)/.test(t);
+  if (!hasLine) return null;
+  const NUM_WORDS = { "אחת": 1, "אחד": 1, "שתיים": 2, "שניים": 2, "שלוש": 3, "ארבע": 4, "חמש": 5, "שש": 6, "שישה": 6, "שבע": 7, "שמונה": 8 };
+  let specificNum = 0;
+  const mDig = t.match(/שלוח[הת][^0-9]{0,12}([1-8])/);
+  if (mDig) specificNum = parseInt(mDig[1], 10);
+  if (!specificNum) {
+    const mW = t.match(/שלוח[הת]\s+(?:מספר\s+)?(אחת|אחד|שתיים|שניים|שלוש|ארבע|חמש|שש|שישה|שבע|שמונה)/);
+    if (mW) specificNum = NUM_WORDS[mW[1]] || 0;
+  }
+  const specific = specificNum ? [null, String(specificNum)] : null;
+  try {
+    const d = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + (specific ? specific[1] : "1") + "/ext.ini", { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!d.ok && specific) return null;
+  } catch (_) {}
+  if (specific) {
+    const n = parseInt(specific[1], 10);
+    const hebrewNum = ["", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה"][n];
+    return "שלוחה " + hebrewNum + " היא " + (LINE_EXT_DESC[n] || "שלוחה בקו") + ".";
+  }
+  if (!/(?:מה יש|איזה שלוחות|כל השלוחות|התפריט|על הקו|הקו שלי)/.test(t)) return null;
+  let parts = [];
+  for (let n = 1; n <= 8; n++) parts.push(n === 3 || n === 7 ? "שלוחה שלוש היא העוזר החכם" : "");
+  const order = [[1, "אחת"], [2, "שתיים"], [3, "שלוש"], [4, "ארבע"], [5, "חמש"], [6, "שש"], [7, "שבע"], [8, "שמונה"]];
+  let out = "בקו יש שמונה שלוחות. ";
+  for (const [n, hn] of order) out += "שלוחה " + hn + ": " + (LINE_EXT_DESC[n] || "") + ". ";
+  out += "בכל שלוחה, כוכבית מחזירה לתפריט הקודם.";
+  return out;
+}
+__name(maybeLineInfo, "maybeLineInfo");
+__name2(maybeLineInfo, "maybeLineInfo");
+__name22(maybeLineInfo, "maybeLineInfo");
+
 async function tlkSendMail(env, callerPhone, item, mail) {
   if (!mail || !/.+@.+/.test(mail)) return false;
   const isTorah = item.style === "torah";
@@ -3233,8 +3278,16 @@ async function hqRunJob(env, jobId) {
   if (!job || job.done) return true;
   job.attempts = (job.attempts || 0) + 1;
   try {
-    const res = await tlkProcessRecording(env, job.path, job.phone, true);
-    if (res.error) throw new Error(res.error);
+    let res;
+    if (/\.tts$/i.test(job.path)) {
+      const d = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + job.path.replace(/^\/+/, ""), { headers: { "User-Agent": "Mozilla/5.0" } });
+      const txt = (await d.text()).trim();
+      if (!txt) throw new Error("empty tts");
+      res = { raw: txt, style: ((await tlkLoad(env, "tlk_cfg_" + job.phone)) || {}).style || "general", blob: null };
+    } else {
+      res = await tlkProcessRecording(env, job.path, job.phone, true);
+      if (res.error) throw new Error(res.error);
+    }
     const cfg = (await tlkLoad(env, "tlk_cfg_" + job.phone)) || {};
     const refined = await hqRefine(env, res.raw, cfg);
     const item = { id: "t" + Date.now(), at: job.at || Date.now(), updated: Date.now(), text: refined, raw: res.raw, style: res.style, via: "hq" };
@@ -3282,7 +3335,7 @@ async function hqScanDrop(env) {
     let added = 0;
     for (const f of files) {
       const nm = String(f.name || "");
-      const isAudio = /\.(wav|mp3|m4a|ogg|flac|aac)$/i.test(nm);
+      const isAudio = /\.(wav|mp3|m4a|ogg|flac|aac|tts)$/i.test(nm);
       const isM = /^M\d+/i.test(nm);
       const seenArr = Array.isArray(seen) ? seen : [];
       const isSeen = seenArr.indexOf(nm) >= 0;
