@@ -2259,7 +2259,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("אין הרשאה לגישה למייל ממספר זה");
     }
-    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, יש לי מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. כשהכתובת נאמרת באותיות ובמספרים בעברית, תרגם אותן לאנגלית: וואי היא האות y, וי היא v, טי היא t, שטרודל הוא @ ונקודה היא . למשל וואי אפס חמש אפס שטרודל גימייל נקודה קום זה y050@gmail.com. אל תשמיט את האות הראשונה של הכתובת. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
+    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, יש לי מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. בחיפוש החזר את מילות החיפוש בדיוק כפי שנאמרו בעברית, בלי לתרגם שמות לאנגלית ובלי קידומת from. למשל חפש מיילים מעמנואל זה query עמנואל, ומה המייל האחרון שעמנואל שלח לי זה query עמנואל. חיפוש של שם עברי עובד בגימייל כמו שהוא. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. כשהכתובת נאמרת באותיות ובמספרים בעברית, תרגם אותן לאנגלית: וואי היא האות y, וי היא v, טי היא t, שטרודל הוא @ ונקודה היא . למשל וואי אפס חמש אפס שטרודל גימייל נקודה קום זה y050@gmail.com. אל תשמיט את האות הראשונה של הכתובת. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
@@ -2303,6 +2303,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         return speak(ans || fmtEmailList(msgs));
       }
       const _lbl = account === 2 ? "בחשבון השני, " : "";
+      if (!msgs.length && plan.action === "search") return speak("לא מצאתי מיילים לחיפוש הזה, אמור שם אחר או מילה מהנושא");
       return speak(_lbl + fmtEmailList(msgs));
     }
     if (plan.action === "read") {
@@ -2378,11 +2379,17 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         logEvent("email_reply_pending_confirm", { caller: callerTail(callerPhone) });
         return await pendingConfirmRead(env, callerPhone, { kind: "email", to: data.fromAddr || data.from, subject: subj, body: p.body || "", inReplyTo: data.id, threadId: data.threadId, name: cleanFromName(data.from), account: _acct }, `לענות למייל מאת ${cleanFromName(data.from)}, בנושא ${data.subject || ""}, עם התוכן ${p.body || "ריק"}? לאישור הקש אחת, לביטול הקש שתיים`);
       }
-      const to = normalizeAddress(p.to);
-      if (!to.includes("@") || !to.split("@")[1]) return speak("אמור שוב את כתובת ההעברה, כולל שטרודל");
+      let to = normalizeAddress(p.to);
+      let fwdName = "";
+      if (!to.includes("@")) {
+        const contacts = await getContacts(env, callerPhone);
+        const fm = findContactMatches(contacts, String(p.to || ""));
+        if (fm.length >= 1) { to = fm[0].address; fwdName = fm[0].name; }
+      }
+      if (!to.includes("@") || !to.split("@")[1]) return speak("לא הצלחתי לזהות למי להעביר. אמור את שם איש הקשר או את הכתובת כולל שטרודל");
       const fwdBody = "הודעה שהועברה אליך:\n" + (data.body || "").slice(0, 3e3);
       logEvent("email_forward_pending_confirm", { caller: callerTail(callerPhone) });
-      return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "העברה של " + (data.subject || "מייל"), body: fwdBody, account: _acct }, `להעביר את המייל בנושא ${data.subject || ""} אל ${to}? לאישור הקש אחת, לביטול הקש שתיים`);
+      return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: "העברה של " + (data.subject || "מייל"), body: fwdBody, account: _acct }, `להעביר את המייל בנושא ${data.subject || ""} אל ${fwdName || to}? לאישור הקש אחת, לביטול הקש שתיים`);
     }
     return speak("לא הבנתי את בקשת המייל");
   } catch (e) {
