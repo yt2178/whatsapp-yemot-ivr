@@ -509,6 +509,17 @@ var worker_default = {
       const YEMOT_TOKEN_S = env.YEMOT_TOKEN || "";
       let cursor;
       do {
+        try {
+          const jl = await env.USER_MEMORY.list({ prefix: "tlk_job_" });
+          for (const jk of jl.keys || []) {
+            try {
+              const jraw = await env.USER_MEMORY.get(jk.name);
+              if (!jraw) continue;
+              const j = JSON.parse(jraw);
+              if (j && j.at && Date.now() - j.at > 120000) { logEvent("tlk_job_drain", { age: Math.round((Date.now() - j.at) / 1000) }); await tlkFinishJob(env, jk.name.replace("tlk_job_", "")); }
+            } catch (_) {}
+          }
+        } catch (_) {}
         const listRes = await env.USER_MEMORY.list({ prefix: "reminder_" });
         for (const k of listRes.keys || []) {
           try {
@@ -557,7 +568,7 @@ var worker_default = {
     }
     if (url.pathname.startsWith("/tlk/")) {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
-      return await handleTlkRequest(env, params, callerPhone);
+      return await handleTlkRequest(env, params, callerPhone, ctx);
     }
 
     const mailboxAuth = url.pathname.startsWith("/ivr/") ? url.pathname.slice(5) : "";
@@ -2660,38 +2671,80 @@ async function tlkRead(env, promptText, readParams) {
 __name(tlkRead, "tlkRead");
 __name2(tlkRead, "tlkRead");
 __name22(tlkRead, "tlkRead");
-async function tlkProcessRecording(env, rawPath, callerPhone) {
-  let p = String(rawPath).trim();
-  while (p.startsWith("ivr2:") || p.startsWith("/")) { if (p.startsWith("ivr2:")) p = p.substring(5); if (p.startsWith("/")) p = p.substring(1); }
-  const dl = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + p, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!dl.ok) { logEvent("tlk_dl_failed", { status: dl.status }); return { error: "download" }; }
-  const audioBlob = await dl.blob();
-  return await tlkProcessBlob(env, audioBlob, callerPhone);
+function tlkWavSplit(buf, maxBytes) {
+  try {
+    const dv = new DataView(buf);
+    if (dv.byteLength < 44) return null;
+    const tag = (o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+    if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+    let off = 12, fmtLen = 0, dataOff = -1, dataLen = 0;
+    while (off + 8 <= dv.byteLength) {
+      const id = tag(off), size = dv.getUint32(off + 4, true);
+      if (id === "fmt ") fmtLen = size;
+      else if (id === "data") { dataOff = off + 8; dataLen = size; if (dataOff + dataLen > dv.byteLength) dataLen = dv.byteLength - dataOff; break; }
+      off += 8 + size + (size % 2);
+    }
+    if (!fmtLen || dataOff < 0) return null;
+    const headerLen = dataOff;
+    const maxData = maxBytes - headerLen;
+    if (maxData < 100000 || dataLen <= maxData) return null;
+    const out = [];
+    for (let p = 0; p < dataLen; p += maxData) {
+      const chunkData = Math.min(maxData, dataLen - p);
+      const ab = new ArrayBuffer(headerLen + chunkData);
+      const nb = new Uint8Array(ab);
+      nb.set(new Uint8Array(buf, 0, headerLen), 0);
+      const ndv = new DataView(ab);
+      ndv.setUint32(4, headerLen + chunkData - 8, true);
+      ndv.setUint32(headerLen - 4, chunkData, true);
+      nb.set(new Uint8Array(buf, dataOff + p, chunkData), headerLen);
+      out.push(new Blob([ab], { type: "audio/wav" }));
+    }
+    return out;
+  } catch (_) { return null; }
 }
-__name(tlkProcessRecording, "tlkProcessRecording");
-__name2(tlkProcessRecording, "tlkProcessRecording");
-__name22(tlkProcessRecording, "tlkProcessRecording");
-async function tlkProcessBlob(env, audioBlob, callerPhone) {
-  if (!audioBlob || audioBlob.size < 1000) return { error: "empty" };
-  if (audioBlob.size > 24 * 1024 * 1024) return { error: "big", sizeMB: Math.round(audioBlob.size / 1048576) };
-  const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
-  const style = cfg.style === "torah" ? "torah" : "general";
+__name(tlkWavSplit, "tlkWavSplit");
+__name2(tlkWavSplit, "tlkWavSplit");
+__name22(tlkWavSplit, "tlkWavSplit");
+async function tlkWhisper(env, blob, style) {
   const fd = new FormData();
-  fd.append("file", audioBlob, "recording.wav");
+  fd.append("file", blob, "recording.wav");
   fd.append("model", "whisper-large-v3");
   fd.append("language", "he");
   fd.append("temperature", "0");
   fd.append("prompt", TLK_WHISPER_PROMPT[style]);
-  const t0 = Date.now();
   const wr = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.GROQ_KEY }, body: fd });
-  if (!wr.ok) { logEvent("tlk_whisper_failed", { status: wr.status }); return { error: "whisper" }; }
-  let raw = String((await wr.json()).text || "").trim();
+  if (!wr.ok) { logEvent("tlk_whisper_failed", { status: wr.status }); return null; }
+  return String((await wr.json()).text || "").trim();
+}
+__name(tlkWhisper, "tlkWhisper");
+__name2(tlkWhisper, "tlkWhisper");
+__name22(tlkWhisper, "tlkWhisper");
+async function tlkProcessBlob(env, audioBlob, callerPhone) {
+  if (!audioBlob || audioBlob.size < 1000) return { error: "empty" };
+  const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
+  const style = cfg.style === "torah" ? "torah" : "general";
+  let blobs = [audioBlob];
+  if (audioBlob.size > 30 * 1024 * 1024) blobs.holdAudio = false;
+  if (audioBlob.size > 18 * 1024 * 1024) {
+    const parts = tlkWavSplit(await audioBlob.arrayBuffer(), 18 * 1024 * 1024);
+    if (parts && parts.length > 1) { blobs = parts; logEvent("tlk_split", { parts: parts.length }); }
+    else if (audioBlob.size > 24 * 1024 * 1024) return { error: "big", sizeMB: Math.round(audioBlob.size / 1048576) };
+  }
+  const t0 = Date.now();
+  const raws = [];
+  for (const b of blobs) {
+    const t = await tlkWhisper(env, b, style);
+    if (t === null) { if (raws.length) break; return { error: "whisper" }; }
+    if (t) raws.push(t);
+  }
+  let raw = raws.join(" ").replace(/\s+/g, " ").trim();
   if (!raw) return { error: "silent" };
-  logEvent("tlk_whisper_ok", { ms: Date.now() - t0, chars: raw.length });
+  logEvent("tlk_whisper_ok", { ms: Date.now() - t0, chars: raw.length, chunks: blobs.length });
   let final = raw;
   if (raw.length > 12) {
     const words = raw.split(/\s+/).length;
-    const edited = await groqChatShort(env.GROQ_KEY, TLK_STYLE_AI[style], raw, Math.min(3000, Math.max(400, words * 3)));
+    const edited = await groqChatShort(env, TLK_STYLE_AI[style], raw, Math.min(4000, Math.max(400, words * 3)));
     if (edited) {
       const eWords = edited.split(/\s+/).length;
       if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
@@ -2699,9 +2752,66 @@ async function tlkProcessBlob(env, audioBlob, callerPhone) {
   }
   return { raw, final, style, blob: audioBlob, seconds: Math.round((Date.now() - t0) / 1000) };
 }
+__name(tlkProcessBlob, "tlkProcessBlob");
+__name2(tlkProcessBlob, "tlkProcessBlob");
+__name22(tlkProcessBlob, "tlkProcessBlob");
+async function tlkProcessRecording(env, rawPath, callerPhone) {
+  let p = String(rawPath).trim();
+  while (p.startsWith("ivr2:") || p.startsWith("/")) { if (p.startsWith("ivr2:")) p = p.substring(5); if (p.startsWith("/")) p = p.substring(1); }
+  const dl = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + p, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!dl.ok) { logEvent("tlk_dl_failed", { status: dl.status }); return { error: "download" }; }
+  return await tlkProcessBlob(env, await dl.blob(), callerPhone);
+}
 __name(tlkProcessRecording, "tlkProcessRecording");
 __name2(tlkProcessRecording, "tlkProcessRecording");
 __name22(tlkProcessRecording, "tlkProcessRecording");
+async function tlkSaveTranscript(env, phone, res, jobId, appendTo, via) {
+  let list = (await tlkLoad(env, "tlk_" + phone)) || [];
+  let item = null, appended = false;
+  if (appendTo) {
+    item = list.find((x) => x.id === appendTo);
+    if (item) { item.text = item.text + "\n\n" + res.final; item.raw = item.raw + "\n\n" + res.raw; item.updated = Date.now(); item.appendCount = (item.appendCount || 0) + 1; delete item.status; appended = true; }
+  }
+  if (!appended) {
+    if (jobId) { const ph = list.find((x) => x.id === jobId); if (ph) list = list.filter((x) => x.id !== jobId); }
+    const id = "t" + Date.now();
+    item = { id, at: Date.now(), updated: Date.now(), text: res.final, raw: res.raw, style: res.style, via: via || "phone" };
+    if (res.blob && await tlkStoreAudio(env, res.blob, id)) item.audio = id;
+    list.unshift(item);
+  }
+  if (list.length > 50) list = list.slice(0, 50);
+  await tlkStore(env, "tlk_" + phone, list);
+  return { item, appended };
+}
+__name(tlkSaveTranscript, "tlkSaveTranscript");
+__name2(tlkSaveTranscript, "tlkSaveTranscript");
+__name22(tlkSaveTranscript, "tlkSaveTranscript");
+async function tlkFinishJob(env, jobId) {
+  const job = await tlkLoad(env, "tlk_job_" + jobId);
+  if (!job || job.done) return;
+  try {
+    const res = await tlkProcessRecording(env, job.path, job.phone);
+    if (res.error) {
+      let list = (await tlkLoad(env, "tlk_" + job.phone)) || [];
+      const ph = list.find((x) => x.id === jobId);
+      if (ph) { ph.status = "error"; ph.text = res.error === "silent" || res.error === "empty" ? "לא נשמע דיבור בהקלטה" : (res.error === "big" ? "ההקלטה גדולה מדי לתמלול" : "התמלול נכשל, נסו שוב"); await tlkStore(env, "tlk_" + job.phone, list); }
+      await tlkStore(env, "tlk_job_" + jobId, null);
+      return;
+    }
+    const { item } = await tlkSaveTranscript(env, job.phone, res, jobId, job.appendTo || null, "phone");
+    const cfg = (await tlkLoad(env, "tlk_cfg_" + job.phone)) || {};
+    const isOwner = !env.MAILBOX_OWNER_PHONE || String(job.phone).endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
+    const mail = (await tlkLoad(env, "tlk_mail_" + job.phone)) || (isOwner ? "y0508352872@gmail.com" : "");
+    if (mail && (cfg.sendEmail === undefined ? isOwner : cfg.sendEmail !== false)) await tlkSendMail(env, job.phone, item, mail);
+    logEvent("tlk_job_done", { ok: true, chars: res.final.length });
+  } catch (e) {
+    logEvent("tlk_job_error", { type: e?.name || "Error" });
+  }
+  await tlkStore(env, "tlk_job_" + jobId, null);
+}
+__name(tlkFinishJob, "tlkFinishJob");
+__name2(tlkFinishJob, "tlkFinishJob");
+__name22(tlkFinishJob, "tlkFinishJob");
 async function tlkStoreAudio(env, blob, id) {
   try {
     const fd2 = new FormData();
@@ -2716,7 +2826,8 @@ __name2(tlkStoreAudio, "tlkStoreAudio");
 __name22(tlkStoreAudio, "tlkStoreAudio");
 async function tlkSendMail(env, callerPhone, item, mail) {
   try {
-    const body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ותומלל בקו הטלפוני ב" + tlkDateStr(item.at) + ". סגנון: " + (item.style === "torah" ? "תורני" : "רגיל") + ".";
+    let body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ותומלל בקו הטלפוני ב" + tlkDateStr(item.at) + ". סגנון: " + (item.style === "torah" ? "תורני" : "רגיל") + ".";
+    if (item.audio) body += "\n\nהקלטת השמע זמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
     const r = await callBridge(env, { action: "send", to: mail, subject: "תמלול חדש מהקו - " + tlkDateStr(item.at), body }, 1);
     logEvent("tlk_mail", { ok: Boolean(r && r.ok) });
     return Boolean(r && r.ok);
@@ -2726,44 +2837,53 @@ __name(tlkSendMail, "tlkSendMail");
 __name2(tlkSendMail, "tlkSendMail");
 __name22(tlkSendMail, "tlkSendMail");
 async function tlkMainMenu(env) {
-  return tlkRead(env, "לתמלול הקלטה חדשה הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לסטטוס החשבון הקש שלוש. להגדרות הקש ארבע.", "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+  return tlkRead(env, "להקלטה חדשה לתמלול הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לקוד הכניסה לאתר הקש שלוש. להגדרות הקש ארבע. לסטטוס החשבון הקש חמש.", "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
 }
 __name(tlkMainMenu, "tlkMainMenu");
 __name2(tlkMainMenu, "tlkMainMenu");
 __name22(tlkMainMenu, "tlkMainMenu");
-async function handleTlkRequest(env, params, callerPhone) {
+async function handleTlkRequest(env, params, callerPhone, ctx) {
   callerPhone = normalizeIsraelPhone(callerPhone);
-  logEvent("tlk_request", { caller: String(callerPhone).slice(-4), hasLink: Boolean(params.link), menu: String(params.menu || ""), pick: String(params.pick || ""), set: String(params.set || ""), after: String(params.after || "") });
+  logEvent("tlk_request", { caller: String(callerPhone).slice(-4), hasLink: Boolean(params.link), menu: String(params.menu || ""), pick: String(params.pick || ""), set: String(params.set || ""), code: String(params.code || "") });
   if (!callerPhone) return tlkSay(env, "שגיאה בזיהוי המאזין, נסה שוב");
   const key = "tlk_" + callerPhone;
   const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
-  const isOwner = !env.MAILBOX_OWNER_PHONE || String(callerPhone).replace(/\D/g, "").endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
-  const c = { sendEmail: cfg.sendEmail === undefined ? isOwner : cfg.sendEmail !== false, playResult: cfg.playResult !== false, style: cfg.style === "torah" ? "torah" : "general" };
+  const c = { sendEmail: cfg.sendEmail === undefined ? true : cfg.sendEmail !== false, playResult: cfg.playResult !== false, style: cfg.style === "torah" ? "torah" : "general", autoHangup: cfg.approve !== true, approve: cfg.approve === true, quickRec: cfg.quickRec === true };
+  const isOwner = !env.MAILBOX_OWNER_PHONE || callerPhone.endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
   const mail = (await tlkLoad(env, "tlk_mail_" + callerPhone)) || (isOwner ? "y0508352872@gmail.com" : "");
+  const digitsHe = (n) => String(n).split("").map((d) => ["אפס", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה", "תשע"][Number(d)]).join(", ");
 
-  // ----- הקלטה חדשה או המשך -----
+  // ----- הקלטה שהגיעה -----
   const recPath = params.link || params.file_path || params.RecordingPath || "";
   if (recPath && String(recPath).includes(".wav")) {
     const pend = await tlkLoad(env, "tlk_pend_" + callerPhone);
+    const appendTo = (pend && pend.appendTo) || null;
+    if (c.approve && !appendTo) {
+      // מצב שמיעה ואישור
+      await tlkStore(env, "tlk_pendA_" + callerPhone, { path: String(recPath), at: Date.now() });
+      let fp = String(recPath).replace(/^ivr2:?\/?/, "").replace(/^\/+/, "");
+      const f = await ttsTextToYemotFile(env, "כך נשמעה ההקלטה. לשליחה לתמלול הקש אחת, להקלטה מחדש הקש שתיים, לביטול הקש שלוש.");
+      let body = "id_list_message=f-/" + fp + (f ? "&read=f-" + f + "=confirm,no,1,1,20,Digits,yes,yes,,,,,None," : "");
+      return new Response(body, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+    }
+    if (c.autoHangup) {
+      // ניתוק מיידי + עיבוד ברקע
+      const jobId = "t" + Date.now();
+      let list = (await tlkLoad(env, key)) || [];
+      if (!appendTo) { list.unshift({ id: jobId, at: Date.now(), updated: Date.now(), status: "processing", via: appendTo ? "phone" : "phone", text: "", raw: "" }); if (list.length > 50) list = list.slice(0, 50); await tlkStore(env, key, list); }
+      await tlkStore(env, "tlk_job_" + jobId, { phone: callerPhone, path: String(recPath), appendTo, at: Date.now() });
+      await tlkStore(env, "tlk_pend_" + callerPhone, null);
+      const p = tlkFinishJob(env, jobId);
+      if (ctx && ctx.waitUntil) ctx.waitUntil(p); else await p;
+      return tlkSay(env, appendTo ? "ההמשך נקלט ויוסף לתמלול תוך שניות. שלום." : "ההקלטה נקלטה. התמלול יישלח למייל ויופיע באזור האישי באתר תוך שניות. שלום.");
+    }
+    // מצב סינכרוני רגיל (ברירת מחדל ישנה): עיבוד והקראה בקו
     const res = await tlkProcessRecording(env, recPath, callerPhone);
     if (res.error === "download") return tlkSay(env, "לא הצלחתי להוריד את ההקלטה, נסה שוב");
     if (res.error === "empty" || res.error === "silent") return tlkSay(env, "לא נשמע דיבור בהקלטה, נסה להקליט שוב");
-    if (res.error === "big") return tlkSay(env, "ההקלטה ארוכה מדי ואינה ניתנת לתמלול בשלמותה, נסה להקליט אותה בשני חלקים ולשרשר אותם כהמשך");
+    if (res.error === "big") return tlkSay(env, "ההקלטה ארוכה מדי ואינה ניתנת לתמלול, נסה להקליט אותה בשני חלקים ולשרשר אותם כהמשך");
     if (res.error === "whisper") return tlkSay(env, "שירות התמלול עמוס כרגע, נסה שוב בעוד דקה");
-    let list = (await tlkLoad(env, key)) || [];
-    let item;
-    let appended = false;
-    if (pend && pend.appendTo) {
-      item = list.find((x) => x.id === pend.appendTo);
-      if (item) { item.text = item.text + "\n\n" + res.final; item.raw = item.raw + "\n\n" + res.raw; item.updated = Date.now(); item.appendCount = (item.appendCount || 0) + 1; appended = true; }
-    }
-    if (!appended) {
-      item = { id: "t" + Date.now(), at: Date.now(), updated: Date.now(), text: res.final, raw: res.raw, style: res.style };
-      if (res.blob && await tlkStoreAudio(env, res.blob, item.id)) item.audio = item.id;
-      list.unshift(item);
-      if (list.length > 50) list = list.slice(0, 50);
-    }
-    await tlkStore(env, key, list);
+    const { item, appended } = await tlkSaveTranscript(env, callerPhone, res, null, appendTo, "phone");
     await tlkStore(env, "tlk_pend_" + callerPhone, null);
     let mailSent = false;
     if (c.sendEmail && mail) mailSent = await tlkSendMail(env, callerPhone, item, mail);
@@ -2772,45 +2892,62 @@ async function handleTlkRequest(env, params, callerPhone) {
     if (appended) say = "ההמשך נוסף בהצלחה לתמלול מ" + tlkDateStr(item.at) + mailNote + ". ";
     else say = "התמלול הושלם" + mailNote + ". ";
     if (c.playResult && res.final.length <= 1500) say = say + "כך הוא נשמע: " + res.final;
-    else if (c.playResult) say = say + "תחילת התמלול: " + res.final.slice(0, 350) + ". התמלול המלא ארוך ונשמר" + mailNote + ". ";
+    else if (c.playResult) say = say + "תחילת התמלול: " + res.final.slice(0, 350) + ". התמלול המלא ארוך ונשמר. ";
     else say = say + "אורכו כ" + res.final.split(/\s+/).length + " מילים. ";
     say = say + " להקלטה נוספת הקש אחת, לתפריט הקש שתיים.";
     return tlkRead(env, say, "again,no,1,1,15,Digits,yes,yes,,,,,None,");
   }
-  if (params.again === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט המתן לשקט.", "link,,record,/7/rec,,no,yes,,1,1200");
-  if (params.again && params.again !== "1") return tlkMainMenu(env);
+  if (params.again === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט נתק.", "link,,record,/7/rec,,no,yes,,1,2700");
+  if (params.again) return tlkMainMenu(env);
 
-  // ----- בחירת תמלול לשמיעה / המשך / מייל חוזר -----
+  // ----- אישור במצב שמיעה ואישור -----
+  const pendA = await tlkLoad(env, "tlk_pendA_" + callerPhone);
+  const confirmV = String(params.confirm || "");
+  if (pendA && confirmV && !params.link) {
+    if (confirmV === "1") {
+      const jobId = "t" + Date.now();
+      let list = (await tlkLoad(env, key)) || [];
+      list.unshift({ id: jobId, at: pendA.at || Date.now(), updated: Date.now(), status: "processing", via: "phone", text: "", raw: "" });
+      await tlkStore(env, key, list);
+      await tlkStore(env, "tlk_job_" + jobId, { phone: callerPhone, path: pendA.path, appendTo: null, at: Date.now() });
+      await tlkStore(env, "tlk_pendA_" + callerPhone, null);
+      const p = tlkFinishJob(env, jobId);
+      if (ctx && ctx.waitUntil) ctx.waitUntil(p); else await p;
+      return tlkSay(env, "ההקלטה נשלחה לתמלול. התמלול יגיע למייל ולאזור האישי תוך שניות. שלום.");
+    }
+    if (confirmV === "2") { await tlkStore(env, "tlk_pendA_" + callerPhone, null); return tlkRead(env, "הקלט מחדש אחרי הצליל. בסיום הקש סולמית.", "link,,record,/7/rec,,no,yes,,1,2700"); }
+    await tlkStore(env, "tlk_pendA_" + callerPhone, null);
+    return tlkMainMenu(env);
+  }
+
+  // ----- בחירת תמלול לשמיעה / מייל חוזר / המשך -----
   const pick = String(params.pick || "");
   if (pick) {
     const list = (await tlkLoad(env, key)) || [];
     const idx = Number(pick) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= list.length || idx >= 5) return tlkSay(env, "בחירה שגויה");
+    if (isNaN(idx) || idx < 0 || idx >= list.length || idx >= 5 || list[idx].status) return tlkSay(env, "בחירה שגויה");
     const item = list[idx];
     const after = String(params.after || "");
-    if (after === "1") {
+    if (after === "1") { const ok = await tlkSendMail(env, callerPhone, item, mail); return tlkSay(env, ok ? "התמלול נשלח שוב למייל" : "שליחת המייל נכשלה, נסה שוב מאוחר יותר"); }
+    if (after === "2") {
       await tlkStore(env, "tlk_pend_" + callerPhone, { appendTo: item.id });
-      return tlkRead(env, "הקלט את ההמשך עבור התמלול מ" + tlkDateStr(item.at) + ". בסיום הקש סולמית.", "link,,record,/7/rec,,no,yes,,1,1200");
+      return tlkRead(env, "הקלט את ההמשך עבור התמלול מ" + tlkDateStr(item.at) + ". בסיום הקש סולמית או נתק.", "link,,record,/7/rec,,no,yes,,1,2700");
     }
-    if (after === "3") {
-      const ok = await tlkSendMail(env, callerPhone, item, mail);
-      return tlkSay(env, ok ? "התמלול נשלח שוב למייל" : "שליחת המייל נכשלה, נסה שוב מאוחר יותר");
-    }
-    if (after === "2") return tlkMainMenu(env);
+    if (after === "3") return tlkMainMenu(env);
     const body = item.text.length > 2000 ? item.text.slice(0, 2000) + ". ההמשך במייל." : item.text;
     return tlkRead(env, "תמלול מ" + tlkDateStr(item.at) + ": " + body, "after,no,1,1,15,Digits,yes,yes,,,,,None,");
   }
-  const after = String(params.after || "");
-  if (after) return tlkMainMenu(env);
+  if (params.after) return tlkMainMenu(env);
 
-  // ----- תפריט ראשי -----
+  // ----- תפריט ראשי (מפת ARISH: 1 הקלטה, 2 אחרונים, 3 קוד אתר, 4 הגדרות, 5 סטטוס) -----
   const menu = String(params.menu || "");
-  if (menu === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט המתן לשקט. ניתן להקליט עד עשרים דקות.", "link,,record,/7/rec,,no,yes,,1,1200");
+  if (menu === "1" || (!menu && c.quickRec && !params.set && !params.code && !params.code2)) return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט נתק. ניתן להקליט עד ארבעים וחמש דקות.", "link,,record,/7/rec,,no,yes,,1,2700");
   if (menu === "2") {
     const list = (await tlkLoad(env, key)) || [];
-    if (!list.length) return tlkRead(env, "אין תמלולים שמורים. להקלטה חדשה הקש אחת.", "menu,no,1,1,15,Digits,yes,yes,,,,,None,");
-    const top = list.slice(0, 5);
-    let say = "יש לך " + list.length + " תמלולים. ";
+    const ready = list.filter((x) => !x.status);
+    if (!ready.length) return tlkRead(env, "אין תמלולים שמורים. להקלטה חדשה הקש אחת.", "menu,no,1,1,15,Digits,yes,yes,,,,,None,");
+    const top = ready.slice(0, 5);
+    let say = "יש לך " + ready.length + " תמלולים. ";
     for (let i = 0; i < top.length; i++) {
       const head = top[i].text.replace(/\s+/g, " ").slice(0, 60);
       say += "תמלול " + (i + 1) + ", מ" + tlkDateStr(top[i].at) + ": " + head + ". ";
@@ -2819,23 +2956,48 @@ async function handleTlkRequest(env, params, callerPhone) {
     return tlkRead(env, say, "pick,no,1,1,20,Digits,yes,yes,,,,,None,");
   }
   if (menu === "3") {
-    const list = (await tlkLoad(env, key)) || [];
-    let say = "יש לך " + list.length + " תמלולים שמורים.";
-    if (list.length) say += " האחרון מ" + tlkDateStr(list[0].at) + ".";
-    say += " שליחה למייל " + (c.sendEmail && mail ? "פעילה לכתובת " + mail : "כבויה") + ". הקראת התמלול לאחר ההקלטה " + (c.playResult ? "פעילה" : "כבויה") + ". סגנון התמלול " + (c.style === "torah" ? "תורני" : "רגיל") + ".";
-    return tlkRead(env, say, "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+    let code = await tlkLoad(env, "tlk_code_" + callerPhone);
+    const codeOpt = String(params.code || "");
+    if (codeOpt === "2") {
+      return tlkRead(env, "הקישו קוד קבוע חדש בן ארבע עד שמונה ספרות ולאחריו סולמית.", "newcode,no,4,8,30,Digits,yes,yes,,,,,None,");
+    }
+    if (codeOpt === "3") {
+      const tmp = String(Math.floor(100000 + Math.random() * 900000));
+      await tlkStore(env, "tlk_tmp_" + callerPhone, { code: tmp, exp: Date.now() + 86400000 });
+      return tlkRead(env, "קוד זמני לאתר למשך יממה: " + digitsHe(tmp) + ". לחזרה לתפריט הקש אחת, לאזור הקוד הקש שתיים.", "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+    }
+    if (!code) { code = String(Math.floor(100000 + Math.random() * 900000)); await tlkStore(env, "tlk_code_" + callerPhone, code); }
+    return tlkRead(env, "הקוד האישי שלך לכניסה לאתר: " + digitsHe(code) + ". האתר: yemot-ai.y0508352872.workers.dev/tlk-site. לשינוי הקוד הקש שתיים, לקוד זמני ליממה הקש שלוש, לתפריט הקש ארבע.", "code,no,1,1,20,Digits,yes,yes,,,,,None,");
+  }
+  if (params.newcode) {
+    const nc = String(params.newcode).replace(/\D/g, "");
+    if (nc.length < 4) return tlkRead(env, "הקוד קצר מדי, חזרה לתפריט הקוד. לשמיעת הקוד הקש אחת, לשינוי הקש שתיים, לקוד זמני הקש שלוש.", "code,no,1,1,20,Digits,yes,yes,,,,,None,");
+    await tlkStore(env, "tlk_code_" + callerPhone, nc);
+    return tlkRead(env, "הקוד שונה בהצלחה. הקוד החדש: " + digitsHe(nc) + ". לתפריט הקש אחת.", "menu,no,1,1,15,Digits,yes,yes,,,,,None,");
   }
   if (menu === "4") {
+    const setPrompt = "הפעלה או כיבוי השמעה חוזרת ברובוט הקש אחת. הפעלה או כיבוי שליחה למייל הקש שתיים. שינוי סגנון ה-Aי בין רגיל לתורני הקש שלוש. כניסה מהירה להקלטה הקש ארבע. ניתוק מיידי לאחר הקלטה הקש חמש. מצב שמיעה ואישור לפני שליחה הקש שש. לחזרה לתפריט הקש שבע.";
     const setv = String(params.set || "");
-    if (setv === "1") { c.sendEmail = !c.sendEmail; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "שליחה למייל " + (c.sendEmail ? "הופעלה" : "כובתה") + ". " + "להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
-    if (setv === "2") { c.playResult = !c.playResult; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "הקראת התמלול " + (c.playResult ? "הופעלה" : "כובתה") + ". להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
-    if (setv === "3") { c.style = c.style === "torah" ? "general" : "torah"; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "סגנון התמלול הוגדר ל" + (c.style === "torah" ? "תורני" : "רגיל") + ". להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
-    if (setv === "4") return tlkMainMenu(env);
-    return tlkRead(env, "להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,");
+    if (setv === "1") { c.playResult = !c.playResult; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "השמעה חוזרת " + (c.playResult ? "הופעלה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "2") { c.sendEmail = !c.sendEmail; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "שליחה למייל " + (c.sendEmail ? "הופעלה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "3") { c.style = c.style === "torah" ? "general" : "torah"; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "סגנון ה-Aי הוגדר ל" + (c.style === "torah" ? "תורני." : "רגיל.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "4") { c.quickRec = !c.quickRec; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "כניסה מהירה להקלטה " + (c.quickRec ? "הופעלה, בכניסה לשלוחה תיכף תתחיל ההקלטה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "5") { c.approve = false; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "ניתוק מיידי לאחר הקלטה הופעל." + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "6") { c.approve = true; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "מצב שמיעה ואישור לפני שליחה הופעל." + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "7") return tlkMainMenu(env);
+    return tlkRead(env, setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,");
+  }
+  if (menu === "5") {
+    const list = (await tlkLoad(env, key)) || [];
+    let say = "יש לך " + list.filter((x) => !x.status).length + " תמלולים שמורים. ";
+    say += "מפתח גרוק לתמלול פעיל. ";
+    say += mail ? "השליחה למייל פעילה לכתובת " + mail + ". " : "השליחה למייל כבויה או שלא הוגדרה כתובת. ";
+    say += "סגנון התמלול " + (c.style === "torah" ? "תורני." : "רגיל.");
+    return tlkRead(env, say, "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
   }
   // כניסה ראשונה לשלוחה
-  const wf = await ttsTextToYemotFile(env, "ברוכים הבאים לשלוחת התמלול. הקלט את דבריך ותקבל תמלול מפוסק בהקראה ובמייל.");
-  const mf = await ttsTextToYemotFile(env, "לתמלול הקלטה חדשה הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לסטטוס החשבון הקש שלוש. להגדרות הקש ארבע.");
+  const wf = await ttsTextToYemotFile(env, "ברוכים הבאים לשלוחת התמלול. הקלט את דבריך בטלפון, במיקרופון של המחשב או בהעלאת קובץ, ותקבל תמלול מפוסק בהקראה, במייל ובאזור האישי באתר.");
+  const mf = await ttsTextToYemotFile(env, "להקלטה חדשה לתמלול הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לקוד הכניסה לאתר הקש שלוש. להגדרות הקש ארבע. לסטטוס החשבון הקש חמש.");
   if (mf) {
     let b = "read=f-" + mf + "=menu,no,1,1,20,Digits,yes,yes,,,,,None,";
     if (wf) b = "id_list_message=f-" + wf + "&" + b;
@@ -2843,7 +3005,7 @@ async function handleTlkRequest(env, params, callerPhone) {
   }
   return tlkMainMenu(env);
 }
-__name(handleTlkRequest, "handleTlkRequest");
+__name(handleTlkRequest, "handleTlkRequest");__name(handleTlkRequest, "handleTlkRequest");
 __name2(handleTlkRequest, "handleTlkRequest");
 __name22(handleTlkRequest, "handleTlkRequest");
 
@@ -2870,7 +3032,12 @@ async function handleTlkSiteApi(env, url, request) {
       const code = String((b && b.code) || "").trim();
       if (!phone || !code) return Response.json({ ok: false, error: "חסרים פרטי כניסה" }, { headers: J });
       const saved = await tlkLoad(env, "tlk_code_" + phone);
-      if (!saved || String(saved) !== code) return Response.json({ ok: false, error: "מספר הטלפון או הקוד שגויים" }, { headers: J });
+      let okCode = saved && String(saved) === code;
+      if (!okCode) {
+        const tmp = await tlkLoad(env, "tlk_tmp_" + phone);
+        if (tmp && tmp.code === code && Date.now() < (tmp.exp || 0)) okCode = true;
+      }
+      if (!okCode) return Response.json({ ok: false, error: "מספר הטלפון או הקוד שגויים" }, { headers: J });
       const token = crypto.randomUUID().replace(/-/g, "") + Date.now().toString(36);
       await env.USER_MEMORY.put("tlk_sess_" + token, JSON.stringify({ phone, exp: Date.now() + 2592000000 }), { expirationTtl: 2592000 });
       return Response.json({ ok: true, token, phone }, { headers: J });
@@ -2889,6 +3056,7 @@ async function handleTlkSiteApi(env, url, request) {
       if (typeof b.text === "string" && b.text.trim()) { item.text = b.text; item.edited = true; }
       if (typeof b.fav === "boolean") item.fav = b.fav;
       if (Array.isArray(b.tags)) item.tags = b.tags.filter(function(t) { return typeof t === "string" && t.trim().length > 0; });
+      if (typeof b.folder === "string") item.folder = b.folder.trim();
       item.updated = Date.now();
       await tlkStore(env, "tlk_" + phone, list);
       return Response.json({ ok: true }, { headers: J });
@@ -2898,6 +3066,21 @@ async function handleTlkSiteApi(env, url, request) {
       let list = (await tlkLoad(env, "tlk_" + phone)) || [];
       list = list.filter((x) => x.id !== (b && b.id));
       await tlkStore(env, "tlk_" + phone, list);
+      return Response.json({ ok: true }, { headers: J });
+    }
+    if (path === "/tlk-api/settings" && request.method === "GET") {
+      const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
+      const mail = (await tlkLoad(env, "tlk_mail_" + phone)) || "";
+      return Response.json({ ok: true, mail, style: cfg.style === "torah" ? "torah" : "general", playResult: cfg.playResult !== false, sendEmail: cfg.sendEmail !== false, approve: cfg.approve === true, quickRec: cfg.quickRec === true }, { headers: J });
+    }
+    if (path === "/tlk-api/settings" && request.method === "POST") {
+      const b = await request.json().catch(() => null) || {};
+      const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
+      if (typeof b.mail === "string") await tlkStore(env, "tlk_mail_" + phone, b.mail.trim());
+      if (b.style === "torah" || b.style === "general") cfg.style = b.style;
+      if (typeof b.playResult === "boolean") cfg.playResult = b.playResult;
+      if (typeof b.sendEmail === "boolean") cfg.sendEmail = b.sendEmail;
+      await tlkStore(env, "tlk_cfg_" + phone, cfg);
       return Response.json({ ok: true }, { headers: J });
     }
     if (path === "/tlk-api/audio") {
@@ -2913,16 +3096,13 @@ async function handleTlkSiteApi(env, url, request) {
       const fd = await request.formData();
       const file = fd.get("file");
       if (!file || !file.size) return Response.json({ ok: false, error: "לא התקבל קובץ" }, { headers: J });
-      if (file.size > 24 * 1024 * 1024) return Response.json({ ok: false, error: "הקובץ גדול מדי לתמלול, נסו להעלות בחלקים" }, { headers: J });
+      if (file.size > 40 * 1024 * 1024) return Response.json({ ok: false, error: "הקובץ גדול מדי לתמלול, נסו להעלות בחלקים" }, { headers: J });
+      const targetId = String(fd.get("targetId") || "");
       const res = await tlkProcessBlob(env, file, phone);
       if (res.error === "empty" || res.error === "silent") return Response.json({ ok: false, error: "לא נשמע דיבור בהקלטה" }, { headers: J });
       if (res.error === "big") return Response.json({ ok: false, error: "הקובץ גדול מדי לתמלול" }, { headers: J });
       if (res.error) return Response.json({ ok: false, error: "התמלול נכשל, נסו שוב" }, { headers: J });
-      const item = { id: "t" + Date.now(), at: Date.now(), updated: Date.now(), text: res.final, raw: res.raw, style: res.style, via: "site" };
-      let list = (await tlkLoad(env, "tlk_" + phone)) || [];
-      list.unshift(item);
-      if (list.length > 50) list = list.slice(0, 50);
-      await tlkStore(env, "tlk_" + phone, list);
+      const { item } = await tlkSaveTranscript(env, phone, res, null, targetId || null, "site");
       const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
       const isOwner = !env.MAILBOX_OWNER_PHONE || phone.endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
       const mail = (await tlkLoad(env, "tlk_mail_" + phone)) || (isOwner ? "y0508352872@gmail.com" : "");
@@ -2940,7 +3120,7 @@ async function handleTlkSiteApi(env, url, request) {
 __name(handleTlkSiteApi, "handleTlkSiteApi");
 __name2(handleTlkSiteApi, "handleTlkSiteApi");
 __name22(handleTlkSiteApi, "handleTlkSiteApi");
-const TLK_SITE_HTML = `<!DOCTYPE html>
+const TLK_SITE_HTML = String.raw`<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
@@ -3010,6 +3190,9 @@ main{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
 #toast{position:fixed;bottom:22px;right:50%;transform:translateX(50%);background:var(--tx);color:#fff;border-radius:10px;padding:12px 22px;font-size:15px;z-index:40;opacity:0;transition:.3s;pointer-events:none}
 #toast.on{opacity:1}
 @media(max-width:640px){.modal{max-height:98vh}.mtop{flex-wrap:wrap}}
+.spin{width:22px;height:22px;border:3px solid #d5e0da;border-top-color:var(--p);border-radius:50%;display:inline-block;animation:sp 1s linear infinite;vertical-align:-5px}
+@keyframes sp{to{transform:rotate(360deg)}}
+select{font-family:inherit;font-size:14px;border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:#fff;color:var(--tx)}
 </style>
 </head>
 <body>
@@ -3038,6 +3221,7 @@ main{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
       <input type="search" id="q" placeholder="🔍 חיפוש בתמלולים...">
       <button id="recbtn">🎤 הקלטה מהמיקרופון</button>
       <button class="sec" id="upbtn">📤 העלאת קובץ שמע</button>
+      <button class="sec" id="stbtn">⚙ הגדרות</button>
       <input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm,.aac,.opus" class="hide">
     </div>
     <div class="bar" style="margin-top:-8px">
@@ -3077,10 +3261,14 @@ main{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
       <button class="sec" id="mtxt">⬇ TXT</button>
       <button class="sec" id="mdoc">⬇ Word</button>
       <button class="sec" id="mcopy">📋 העתקה</button>
+      <button class="sec" id="mapp">🎤 הקלט המשך</button>
+      <button class="sec" id="mshare">🔗 שיתוף</button>
+      <select id="mfold" title="תיקייה">
+        <option value="">ללא תיקייה</option><option value="כללי">כללי</option><option value="עבודה">עבודה</option><option value="לימודים">לימודים</option><option value="רעיונות">רעיונות</option>
+      </select>
       <button class="sec" id="mraw">מקור גולמי</button>
       <button class="danger" id="mdel">🗑 מחיקה</button>
       <span class="cnt" id="cnt"></span>
-      <input id="mtags" placeholder="תגיות (מופרדות בפסיק)" style="max-width:220px;font-size:13.5px;padding:7px 10px">
     </div>
   </div>
 </div>
@@ -3093,6 +3281,20 @@ main{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
   </div>
 </div>
 
+<div id="sov" class="hide">
+  <div class="modal" style="max-width:430px">
+    <div class="mtop"><b>⚙ הגדרות אישיות</b><span class="sp"><button class="sec" id="sclose" style="padding:7px 12px">✕</button></span></div>
+    <div class="mbody" style="padding:20px">
+      <label style="font-size:13px;color:var(--mut)">כתובת מייל לקבלת התמלולים</label>
+      <input id="smail" type="email" placeholder="you@gmail.com" style="margin:6px 0 16px">
+      <label style="font-size:13px;color:var(--mut)">סגנון התמלול</label>
+      <select id="sstyle" style="margin:6px 0 16px;width:100%">
+        <option value="general">רגיל</option><option value="torah">תורני (שיעורים ודברי תורה)</option>
+      </select>
+    </div>
+    <div class="mfoot"><button id="ssave">💾 שמירת הגדרות</button><span class="cnt" id="sinfo"></span></div>
+  </div>
+</div>
 <div id="toast"></div>
 
 <script>
@@ -3128,23 +3330,35 @@ function load(silent){
 }
 function render(){
   var q=$('q').value.trim(), g=$('grid'), h='';
-  var tags={};ITEMS.forEach(function(it){(it.tags||[]).forEach(function(t){tags[t]=1})});
-  var ch='';Object.keys(tags).forEach(function(t){ch+='<span class="chip'+(tagF===t?' on':'')+'" data-t="'+esc(t)+'">'+esc(t)+'</span>'});
+  var tags={};var folds={};
+  ITEMS.forEach(function(it){(it.tags||[]).forEach(function(t){tags[t]=1});if(it.folder)folds[it.folder]=(folds[it.folder]||0)+1});
+  var ch='';
+  ['כללי','עבודה','לימודים','רעיונות'].forEach(function(f){if(folds[f])ch+='<span class="chip'+(tagF==='fld:'+f?' on':'')+'" data-t="fld:'+esc(f)+'">📁 '+f+'</span>'});
+  Object.keys(tags).forEach(function(t){ch+='<span class="chip'+(tagF===t?' on':'')+'" data-t="'+esc(t)+'">'+esc(t)+'</span>'});
   if(favF)ch+='<span class="chip on">★ מועדפים</span>';
   if(ch)$('chips').innerHTML=ch;
   var shown=ITEMS.filter(function(it){
     if(favF&&!it.fav)return false;
-    if(tagF&&(it.tags||[]).indexOf(tagF)<0)return false;
+    if(tagF&&tagF.indexOf('fld:')===0){if(it.folder!==tagF.slice(4))return false}
+    else if(tagF&&(it.tags||[]).indexOf(tagF)<0)return false;
     if(q&&((it.text||'')+' '+(it.raw||'')).indexOf(q)<0)return false;
     return true;
   });
   shown.forEach(function(it){
+    if(it.status==='processing'){
+      h+='<div class="tile" style="opacity:.85"><div class="d">🕐 '+fmtD(it.at)+'</div><div class="t"><span class="spin"></span>&nbsp; '+(it.via==='phone'?'מעבד הקלטה חיה מהטלפון...':'מעבד...')+'</div><div class="meta"><span class="badge">תמלול ב-Groq</span></div></div>';
+      return;
+    }
+    if(it.status==='error'){
+      h+='<div class="tile"><div class="d">🕐 '+fmtD(it.at)+'</div><div class="t">⚠ '+esc(it.text||'התמלול נכשל')+'</div></div>';
+      return;
+    }
     var ex=String(it.text||'').replace(/\s+/g,' ').slice(0,110);
     h+='<div class="tile" data-id="'+it.id+'">'
       +'<button class="star'+(it.fav?' on':'')+'" data-st="'+it.id+'">★</button>'
-      +'<div class="d">🕐 '+fmtD(it.at)+(it.appendCount?' · המשכים: '+it.appendCount:'')+(it.edited?' · נערך':'')+'</div>'
+      +'<div class="d">🕐 '+fmtD(it.at)+(it.appendCount?' · המשכים: '+it.appendCount:'')+(it.edited?' · נערך':'')+(it.via==='site'?' · מהאתר':'')+'</div>'
       +'<div class="t">'+esc(ex)+(ex.length>=110?'...':'')+'</div>'
-      +'<div class="meta"><span class="badge'+(it.style==='torah'?' tor':'')+'">'+(it.style==='torah'?'תורני':'רגיל')+'</span><span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
+      +'<div class="meta"><span class="badge'+(it.style==='torah'?' tor':'')+'">'+(it.style==='torah'?'תורני':'רגיל')+'</span>'+(it.folder?'<span class="badge">📁 '+esc(it.folder)+'</span>':'')+'<span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
       +'</div>';
   });
   g.innerHTML=h;
@@ -3159,7 +3373,6 @@ function open(id){
   $('mstyle').textContent=CUR.style==='torah'?'תורני':'רגיל';$('mstyle').className='badge'+(CUR.style==='torah'?' tor':'');
   $('mstar').className='star'+(CUR.fav?' on':'');
   $('etxt').value=CUR.text;$('eraw').value=CUR.raw||'';
-  $('mtags').value=(CUR.tags||[]).join(', ');
   $('rawbox').classList.add('hide');$('mraw').textContent='מקור גולמי';
   var p=$('player');
   if(CUR.audio){p.classList.remove('hide');$('au').src=API+'audio?id='+encodeURIComponent(CUR.id)+'&t='+encodeURIComponent(TOK);}
@@ -3167,7 +3380,7 @@ function open(id){
   cnt();$('ov').classList.remove('hide');
 }
 function cnt(){$('cnt').textContent=wc($('etxt').value)+' מילים · '+$('etxt').value.length+' תווים'}
-function save(){if(!CUR)return;var t=$('etxt').value;var tg=$('mtags').value.split(',').map(function(x){return x.trim()}).filter(Boolean);api('save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CUR.id,text:t,tags:tg})}).then(function(j){if(j.ok){CUR.text=t;CUR.tags=tg;toast('נשמר ✓');render()}else toast('השמירה נכשלה')})}
+function save(){if(!CUR)return;var t=$('etxt').value;api('save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CUR.id,text:t})}).then(function(j){if(j.ok){CUR.text=t;toast('נשמר ✓');render()}else toast('השמירה נכשלה')})}
 function star(id){api('save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,fav:true})}).then(function(){load()}).catch(function(){load()})}
 function del(){if(!CUR)return;if(!confirm('למחוק את התמלול?'))return;api('delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CUR.id})}).then(function(){$('ov').classList.add('hide');load();toast('נמחק')})}
 
@@ -3252,6 +3465,46 @@ $('upbtn').onclick=function(){$('file').click()};
 $('file').onchange=function(){if(this.files[0])processBlob(this.files[0],this.files[0].name);this.value=''};
 window.addEventListener('dragover',function(e){e.preventDefault()});
 window.addEventListener('drop',function(e){e.preventDefault();var f=e.dataTransfer.files[0];if(f&&f.type.indexOf('audio')>=0||/\.(mp3|wav|m4a|ogg|flac|webm|aac|opus)$/i.test(f?f.name:''))if(f)processBlob(f,f.name)});
+
+/* הקלטת המשך מהמיקרופון לתמלול הפתוח */
+var appRec=null,appCh=[];
+$('mapp').onclick=function(){
+  if(appRec&&appRec.state==='recording'){appRec.stop();return}
+  if(!CUR)return;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('הדפדפן לא תומך בהקלטה');return}
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    appRec=new MediaRecorder(stream);appCh=[];
+    appRec.ondataavailable=function(e){appCh.push(e.data)};
+    appRec.onstop=function(){
+      stream.getTracks().forEach(function(t){t.stop()});
+      var b=new Blob(appCh,{type:appRec.mimeType||'audio/webm'});
+      if(b.size<900){toast('ההקלטה קצרה מדי');return}
+      $('prog').classList.remove('hide');setProg(15,'מקליט המשך','ממיר ומעלה...');
+      downsample(b).then(function(wav){
+        var fd2=new FormData();fd2.append('file',wav,'app.webm');fd2.append('targetId',CUR.id);
+        var x=new XMLHttpRequest();x.open('POST',API+'upload');x.setRequestHeader('Authorization','Bearer '+TOK);
+        x.upload.onprogress=function(e){if(e.lengthComputable)setProg(15+e.loaded/e.total*50,'מקליט המשך','מעלה...')};
+        x.onload=function(){try{var j=JSON.parse(x.responseText);if(j.ok){setProg(100,'הושלם','');setTimeout(function(){$('prog').classList.add('hide');load().then(function(){open(CUR.id)});toast('ההמשך נוסף ✓')},400)}else{$('prog').classList.add('hide');toast(j.error||'נכשל')}}catch(e){$('prog').classList.add('hide');toast('שגיאה')}};
+        x.onerror=function(){$('prog').classList.add('hide');toast('שגיאת רשת')};
+        setProg(70,'מתמלל','מתמלל ומשורשר למסמך...');
+        x.send(fd2);
+      });
+    };
+    appRec.start();$('mapp').textContent='⏹ עצור';toast('מקליט המשך... לחצו שוב לעצירה');
+    var iv=setInterval(function(){if(!appRec||appRec.state!=='recording'){clearInterval(iv);$('mapp').textContent='🎤 הקלט המשך'}},300);
+  }).catch(function(){toast('אין הרשאת מיקרופון')});
+};
+/* שיתוף */
+$('mshare').onclick=function(){if(!CUR)return;var t=$('etxt').value;if(navigator.share)navigator.share({text:t.slice(0,1500)}).catch(function(){});else{$('mcopy').click()}};
+/* הגדרות */
+$('stbtn').onclick=function(){
+  api('settings').then(function(j){if(!j.ok)return;$('smail').value=j.mail||'';$('sstyle').value=j.style||'general';$('sinfo').textContent=j.playResult===false?'':'';
+  $('sov').classList.remove('hide')});
+};
+$('sclose').onclick=function(){$('sov').classList.add('hide')};
+$('ssave').onclick=function(){
+  api('settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mail:$('smail').value,style:$('sstyle').value})}).then(function(j){if(j.ok){toast('ההגדרות נשמרו ✓');$('sov').classList.add('hide')}});
+};
 
 /* כפתורי עורך */
 $('msave').onclick=save;
