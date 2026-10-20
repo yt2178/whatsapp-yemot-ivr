@@ -1,3 +1,4 @@
+import { connect } from "cloudflare:sockets";
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -2824,11 +2825,88 @@ async function tlkStoreAudio(env, blob, id) {
 __name(tlkStoreAudio, "tlkStoreAudio");
 __name2(tlkStoreAudio, "tlkStoreAudio");
 __name22(tlkStoreAudio, "tlkStoreAudio");
-async function tlkSendMail(env, callerPhone, item, mail) {
+// ===== מייל ישיר עם קובץ מצורף (Gmail SMTP דרך sockets) =====
+function b64s(str) { return btoa(unescape(encodeURIComponent(str))); }
+__name(b64s, "b64s");
+async function smtpSendMail(env, to, subject, textBody, wavBlob) {
+  const pass = env.GMAIL_APP_PASS;
+  if (!pass) return false;
+  const from = "y0508352872@gmail.com";
+  let socket;
   try {
-    let body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ותומלל בקו הטלפוני ב" + tlkDateStr(item.at) + ". סגנון: " + (item.style === "torah" ? "תורני" : "רגיל") + ".";
-    if (item.audio) body += "\n\nהקלטת השמע זמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
-    const r = await callBridge(env, { action: "send", to: mail, subject: "תמלול חדש מהקו - " + tlkDateStr(item.at), body }, 1);
+    socket = connect({ hostname: "smtp.gmail.com", port: 465 }, { secureTransport: "on" });
+    const w = socket.writable.getWriter();
+    const dec = new TextDecoder();
+    let buf = "";
+    const readLine = async () => {
+      while (true) {
+        const nl = buf.indexOf("\r\n");
+        if (nl >= 0) { const l = buf.slice(0, nl); buf = buf.slice(nl + 2); return l; }
+        const { value, done } = await socket.readable.getReader().read();
+        if (done) return buf;
+        buf += dec.decode(value);
+      }
+    };
+    const cmd = async (c, expect) => {
+      if (c) { await w.write(new TextEncoder().encode(c + "\r\n")); }
+      const l = await readLine();
+      if (expect && !l.startsWith(expect)) { logEvent("smtp_unexpected", { got: l.slice(0, 40), want: expect }); throw new Error("smtp " + l); }
+      while (l.length > 3 && l[3] === "-") { const l2 = await readLine(); if (expect && l2.startsWith(expect)) break; }
+      return l;
+    };
+    await cmd(null, "220");
+    await cmd("EHLO yemot-ai", "250");
+    await cmd("AUTH LOGIN", "334");
+    await cmd(b64s(from), "334");
+    await cmd(b64s(pass), "235");
+    await cmd("MAIL FROM:<" + from + ">", "250");
+    await cmd("RCPT TO:<" + to + ">", "250");
+    await cmd("DATA", "354");
+    const boundary = "----tlk" + Date.now();
+    let msg = "From: " + from + "\r\nTo: " + to + "\r\nSubject: =?UTF-8?B?" + b64s(subject) + "?=\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n";
+    msg += "--" + boundary + "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n";
+    msg += b64s(textBody) + "\r\n";
+    if (wavBlob && wavBlob.size > 1000 && wavBlob.size < 15 * 1024 * 1024) {
+      const ab = await wavBlob.arrayBuffer();
+      let b64 = "";
+      const u8 = new Uint8Array(ab);
+      for (let i = 0; i < u8.length; i += 12000) b64 += btoa(String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + 12000, u8.length)))) + "\r\n";
+      msg += "--" + boundary + "\r\nContent-Type: audio/wav\r\nContent-Disposition: attachment; filename=\"recording.wav\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64;
+    }
+    msg += "--" + boundary + "--\r\n";
+    const enc = new TextEncoder().encode(msg + ".\r\nQUIT\r\n");
+    await w.write(enc);
+    await w.close();
+    logEvent("smtp_sent", { to: String(to).slice(-10), attachment: Boolean(wavBlob) });
+    return true;
+  } catch (e) {
+    try { socket?.close(); } catch (_) {}
+    logEvent("smtp_failed", { type: e?.name || "Error" });
+    return false;
+  }
+}
+__name(smtpSendMail, "smtpSendMail");
+__name2(smtpSendMail, "smtpSendMail");
+__name22(smtpSendMail, "smtpSendMail");
+
+async function tlkSendMail(env, callerPhone, item, mail) {
+  if (!mail || !/.+@.+/.test(mail)) return false;
+  const isTorah = item.style === "torah";
+  const subj = "תמלול " + (isTorah ? "תורני" : "") + " - " + tlkDateStr(item.at);
+  let wavBlob = null;
+  if (item.audio) {
+    try {
+      const d = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:7/audio/" + item.audio + ".wav", { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (d.ok) wavBlob = await d.blob();
+    } catch (_) {}
+  }
+  let body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ב" + tlkDateStr(item.at) + ". סגנון: " + (isTorah ? "תורני" : "רגיל") + ".";
+  if (wavBlob && wavBlob.size >= 15 * 1024 * 1024) body += "\nההקלטה גדולה ממגבלת הצירוף וזמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
+  if (await smtpSendMail(env, mail, subj, body, wavBlob)) return true;
+  // גשר Apps Script (טקסט בלבד) - הקריאה המקורית
+  body += "\n\nהקלטת השמע זמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
+  try {
+    const r = await callBridge(env, { action: "send", to: mail, subject: subj, body }, 1);
     logEvent("tlk_mail", { ok: Boolean(r && r.ok) });
     return Boolean(r && r.ok);
   } catch (e) { return false; }
@@ -3083,6 +3161,35 @@ async function handleTlkSiteApi(env, url, request) {
       await tlkStore(env, "tlk_cfg_" + phone, cfg);
       return Response.json({ ok: true }, { headers: J });
     }
+    if (path === "/tlk-api/finalize" && request.method === "POST") {
+      const fd = await request.formData();
+      const rawTxt = String(fd.get("text") || "").replace(/\s+/g, " ").trim();
+      if (!rawTxt) return Response.json({ ok: false, error: "אין טקסט לשמירה" }, { headers: J });
+      const cfgF = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
+      const style = cfgF.style === "torah" ? "torah" : "general";
+      let final = rawTxt;
+      if (rawTxt.length > 12) {
+        const words = rawTxt.split(/\s+/).length;
+        const edited = await groqChatShort(env, TLK_STYLE_AI[style], rawTxt, Math.min(4000, Math.max(400, words * 3)));
+        if (edited) {
+          const eWords = edited.split(/\s+/).length;
+          if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
+        }
+      }
+      const item = { id: "t" + Date.now(), at: Date.now(), updated: Date.now(), text: final, raw: rawTxt, style, via: "site-live" };
+      const wavF = fd.get("wav");
+      if (wavF && wavF.size > 1000 && await tlkStoreAudio(env, wavF, item.id)) item.audio = item.id;
+      let list = (await tlkLoad(env, "tlk_" + phone)) || [];
+      list.unshift(item);
+      if (list.length > 50) list = list.slice(0, 50);
+      await tlkStore(env, "tlk_" + phone, list);
+      const isOwnerF = !env.MAILBOX_OWNER_PHONE || phone.endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
+      const mailF = (await tlkLoad(env, "tlk_mail_" + phone)) || (isOwnerF ? "y0508352872@gmail.com" : "");
+      let mailSent = false;
+      if (mailF && (cfgF.sendEmail === undefined ? isOwnerF : cfgF.sendEmail !== false)) mailSent = await tlkSendMail(env, phone, item, mailF);
+      logEvent("tlk_finalize", { chars: final.length, mail: mailSent });
+      return Response.json({ ok: true, item, mailSent }, { headers: J });
+    }
     if (path === "/tlk-api/audio") {
       const id = url.searchParams.get("id") || "";
       const list = (await tlkLoad(env, "tlk_" + phone)) || [];
@@ -3097,6 +3204,14 @@ async function handleTlkSiteApi(env, url, request) {
       const file = fd.get("file");
       if (!file || !file.size) return Response.json({ ok: false, error: "לא התקבל קובץ" }, { headers: J });
       if (file.size > 40 * 1024 * 1024) return Response.json({ ok: false, error: "הקובץ גדול מדי לתמלול, נסו להעלות בחלקים" }, { headers: J });
+      if (String(fd.get("live") || "") === "1") {
+        const cfgL = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
+        const styleL = cfgL.style === "torah" ? "torah" : "general";
+        const txt = await tlkWhisper(env, file, styleL);
+        if (txt === null) return Response.json({ ok: false, error: "התמלול נכשל, נסו שוב" }, { headers: J });
+        logEvent("tlk_live_chunk", { chars: txt.length });
+        return Response.json({ ok: true, text: txt }, { headers: J });
+      }
       const targetId = String(fd.get("targetId") || "");
       const res = await tlkProcessBlob(env, file, phone);
       if (res.error === "empty" || res.error === "silent") return Response.json({ ok: false, error: "לא נשמע דיבור בהקלטה" }, { headers: J });
@@ -3220,6 +3335,7 @@ select{font-family:inherit;font-size:14px;border:1px solid var(--line);border-ra
     <div class="bar">
       <input type="search" id="q" placeholder="🔍 חיפוש בתמלולים...">
       <button id="recbtn">🎤 הקלטה מהמיקרופון</button>
+      <button id="livebtn">⚡ תמלול חי</button>
       <button class="sec" id="upbtn">📤 העלאת קובץ שמע</button>
       <button class="sec" id="stbtn">⚙ הגדרות</button>
       <input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm,.aac,.opus" class="hide">
@@ -3281,6 +3397,19 @@ select{font-family:inherit;font-size:14px;border:1px solid var(--line);border-ra
   </div>
 </div>
 
+<div id="lov" class="hide">
+  <div class="modal" style="max-width:820px">
+    <div class="mtop"><b>⚡ תמלול חי בזמן אמת</b><span class="sp">
+      <span id="lind" class="hide" style="color:#b3402a;font-size:13px">● מקליט</span>
+      <button id="lfin">✅ סיים ושמור</button>
+      <button class="sec" id="lcan" style="padding:8px 12px">✖ ביטול</button>
+    </span></div>
+    <div class="mbody" style="min-height:180px">
+      <div id="lstage" style="color:var(--mut);font-size:14px">ממתין לדיבור... התחילו לדבר והמילים יופיעו כאן</div>
+      <div id="ltxt" style="font-size:17px;line-height:1.8;white-space:pre-wrap"></div>
+    </div>
+  </div>
+</div>
 <div id="sov" class="hide">
   <div class="modal" style="max-width:430px">
     <div class="mtop"><b>⚙ הגדרות אישיות</b><span class="sp"><button class="sec" id="sclose" style="padding:7px 12px">✕</button></span></div>
@@ -3399,6 +3528,114 @@ document.addEventListener('keydown',function(e){
   if((e.ctrlKey||e.metaKey)&&e.key==='s'){save();e.preventDefault()}
 });
 
+/* ===== תמלול חי בזמן אמת ===== */
+var LV={rec:null,chunks:[],wavs:[],text:'',ctx:null,an:null,timer:null,lastSpeech:0,segStart:0,busy:false,stream:null};
+function lvSet(rec){LV.rec=rec;$('lind').classList.toggle('hide',!rec)}
+$('livebtn').onclick=function(){
+  $('lov').classList.remove('hide');$('ltxt').textContent='';$('lstage').classList.remove('hide');$('lstage').textContent='ממתין לדיבור...';
+  LV.text='';LV.chunks=[];LV.wavs=[];LV.busy=false;
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('lstage').textContent='הדפדפן לא תומך בהקלטה';return}
+  navigator.mediaDevices.getUserMedia({audio:true}).then(function(stream){
+    LV.stream=stream;
+    LV.ctx=new (window.AudioContext||window.webkitAudioContext)();
+    LV.an=LV.ctx.createAnalyser();LV.an.fftSize=512;
+    LV.ctx.createMediaStreamSource(stream).connect(LV.an);
+    LV.lastSpeech=Date.now();LV.segStart=Date.now();
+    lvStartRec();
+    LV.timer=setInterval(lvTick,200);
+    lvSet(true);
+  }).catch(function(){$('lstage').textContent='אין הרשאת מיקרופון'});
+};
+function lvStartRec(){
+  LV.chunks=[];
+  LV.rec=new MediaRecorder(LV.stream);
+  LV.rec.ondataavailable=function(e){if(e.data&&e.data.size)LV.chunks.push(e.data)};
+  LV.rec.onstop=function(){
+    var b=new Blob(LV.chunks,{type:LV.rec.mimeType||'audio/webm'});
+    if(b.size>1200)lvSendChunk(b);
+  };
+  LV.rec.start();
+}
+function lvTick(){
+  if(!LV.an)return;
+  var d=new Uint8Array(LV.an.fftSize);
+  LV.an.getByteTimeDomainData(d);
+  var rms=0;for(var i=0;i<d.length;i++){var x=(d[i]-128)/128;rms+=x*x}
+  rms=Math.sqrt(rms/d.length);
+  var now=Date.now();
+  if(rms>0.02){LV.lastSpeech=now;$('lstage').classList.add('hide')}
+  var silentFor=now-LV.lastSpeech, segLen=now-LV.segStart;
+  if((silentFor>1500&&segLen>3000)||(segLen>40000)){ lvCut(); }
+}
+function lvCut(){
+  if(!LV.rec||LV.rec.state!=='recording')return;
+  LV.rec.stop();LV.segStart=Date.now();
+  setTimeout(lvStartRec,120);
+}
+async function lvSendChunk(b){
+  if(LV.busy){setTimeout(function(){lvSendChunk(b)},800);return}
+  LV.busy=true;
+  try{
+    var wav=await downsample(b);
+    LV.wavs.push(wav);
+    var x=new XMLHttpRequest();x.open('POST',API+'upload');
+    x.setRequestHeader('Authorization','Bearer '+TOK);
+    var fd=new FormData();fd.append('file',wav,'live.webm');fd.append('live','1');
+    x.onload=function(){
+      try{var j=JSON.parse(x.responseText);
+        if(j.ok&&j.text){LV.text+=(LV.text?' ':'')+j.text;$('ltxt').textContent=LV.text;$('lstage').classList.add('hide')}
+      }catch(e){}
+      LV.busy=false;
+    };
+    x.onerror=function(){LV.busy=false};
+    x.send(fd);
+  }catch(e){LV.busy=false}
+}
+function lvMergeWavs(blobs){
+  // איחוי קטעי WAV 16kHz מונו לקובץ אחד
+  return Promise.all(blobs.map(function(b){return b.arrayBuffer()})).then(function(bufs){
+    var parts=[];var hdr=null;
+    bufs.forEach(function(ab){
+      var dv=new DataView(ab);var off=12;
+      while(off+8<=ab.byteLength){var id=String.fromCharCode(dv.getUint8(off),dv.getUint8(off+1),dv.getUint8(off+2),dv.getUint8(off+3));var sz=dv.getUint32(off+4,true);
+        if(id==='data'){if(!hdr)hdr=ab.slice(0,off+8);parts.push(new Uint8Array(ab,off+8,Math.min(sz,ab.byteLength-off-8)));break}
+        off+=8+sz+(sz%2)}
+    });
+    if(!parts.length)return new Blob([],{type:'audio/wav'});
+    var total=0;parts.forEach(function(p){total+=p.length});
+    var out=new Uint8Array(hdr.byteLength+total);
+    out.set(new Uint8Array(hdr),0);var o=hdr.byteLength;
+    parts.forEach(function(p){out.set(p,o);o+=p.length});
+    var dv2=new DataView(out.buffer);dv2.setUint32(4,out.length-8,true);dv2.setUint32(hdr.byteLength-4,total,true);
+    return new Blob([out],{type:'audio/wav'});
+  });
+}
+$('lfin').onclick=async function(){
+  if(!LV.text){toast('עדיין אין דיבור מתומלל');return}
+  clearInterval(LV.timer);lvSet(false);
+  if(LV.rec&&LV.rec.state==='recording')LV.rec.stop();
+  $('lstage').textContent='מסיים: עריכה ופיסוק ב-AI ושמירה...';
+  try{
+    var wav=await lvMergeWavs(LV.wavs);
+    var fd=new FormData();fd.append('text',LV.text);if(wav.size>1000)fd.append('wav',wav,'full.wav');
+    var x=new XMLHttpRequest();x.open('POST',API+'finalize');
+    x.setRequestHeader('Authorization','Bearer '+TOK);
+    x.onload=function(){try{var j=JSON.parse(x.responseText);
+      if(j.ok){$('lov').classList.add('hide');LV.stream&&LV.stream.getTracks().forEach(function(t){t.stop()});LV.ctx&&LV.ctx.close();
+        load().then(function(){open(j.item.id)});toast('התמלול החי נשמר ✓')}
+      else{$('lstage').textContent=j.error||'נכשל'}
+    }catch(e){$('lstage').textContent='שגיאה'}};
+    x.onerror=function(){$('lstage').textContent='שגיאת רשת'};
+    x.send(fd);
+  }catch(e){$('lstage').textContent='שגיאה בסיום'}
+};
+$('lcan').onclick=function(){
+  clearInterval(LV.timer);lvSet(false);
+  if(LV.rec&&LV.rec.state==='recording')LV.rec.stop();
+  LV.stream&&LV.stream.getTracks().forEach(function(t){t.stop()});
+  LV.ctx&&LV.ctx.close();
+  $('lov').classList.add('hide');
+};
 /* עיבוד קבצים והקלטות */
 function setProg(v,title,stage){$('ring').style.setProperty('--v',v);$('pv').textContent=Math.round(v)+'%';if(title)$('ptitle').textContent=title;if(stage!==undefined)$('pstage').textContent=stage}
 function downsample(blob){
