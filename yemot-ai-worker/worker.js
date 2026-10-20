@@ -139,9 +139,257 @@ function splitTtsChunks(text, maxLen) {
 __name(splitTtsChunks, "splitTtsChunks");
 __name2(splitTtsChunks, "splitTtsChunks");
 __name22(splitTtsChunks, "splitTtsChunks");
+// ===== Edge TTS DRM v2 (מאומת מול edge-tts 7.3.1) =====
+const EDGE_TKN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const WIN_EPOCH = 11644473600;
+
+const SHA256_INITIAL = [0x6A09E667,0xBB67AE85,0x3C6EF372,0xA54FF53A,0x510E527F,0x9B05688C,0x1F83D9AB,0x5BE0CD19];
+const SHA256_STATE = [0xFD9FBEA2,0x91243CE7,0xBE499094,0xCD2E1E0A,0x6C006F49,0x04BD35AB,0xFEB0A7E4,0x03EFFBD2];
+const SHA256_SCHEDULE = [0xEB24BF9E,0x1558691F,0xA0C09EE2,0x0CFA32BA,0xA622EE8C,0xD1DD9491,0xC0DD25A0,0xF9E70AB6,0xF0C31573,0x7058CE4E,0x7188E606,0x00E5AB33,0xD258B060,0x72766564];
+const K14 = 0xC9DC06A7;
+const SIGMA0_ADJ = 0x059C0B80;
+const SIGMA1_ADJ = 0x000B92C0;
+const CS64_COEF = [
+  [0xE82E91B1,0xB32700D0],[0x44DE24C6,0x88DFF51D],[0x3BEB65BC,0x29514038],
+  [0xC89C5933,0xB328CBDF],[0x8D1EC211,0xD405B4D5],[0x314EF5D5,0x26E55F3C],
+  [0xE92491B1,0x607801C6],[0xF0A5B9D5,0x82B2C1FB],[0x06064CF3,0xFA51A3DA],
+  [0xDA79FA60,0x207CC464],[0xBED20560,0x3C3C74F3],[0x89F9C9F8,0xD2D14B61],
+  [0x35FA38C6,0xBB04A2C1],[0xCB49E3C6,0xC5626167],
+];
+const CS64_FACTOR = 0x82893933;
+const CS64_ADJ0 = 0xF2F90B1A, CS64_ADJ1 = 0x0B1A0000;
+const MASK = 0xFFFFFFFFn;
+const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2].map(BigInt);
+
+const rol16 = (v) => { const x = BigInt(v) & MASK; return ((x << 16n) | (x >> 16n)) & MASK; };
+const sigma0 = (v) => { const x = BigInt(v); return ((x >> 7n) ^ (x << 25n) ^ (x >> 18n) ^ (x << 14n) ^ (x >> 3n)) & MASK; };
+const sigma1 = (v) => { const x = BigInt(v); return ((x >> 17n) ^ (x << 15n) ^ (x >> 19n) ^ (x << 13n) ^ (x >> 10n)) & MASK; };
+
+function wordsLE4Even(bytes) {
+  const pad = (4 - (bytes.length % 4)) % 4;
+  const padded = new Uint8Array(bytes.length + pad);
+  padded.set(bytes);
+  if (padded.length === 0) return [];
+  const words = [];
+  const dv = new DataView(padded.buffer);
+  for (let i = 0; i < padded.length / 4; i++) words.push(BigInt(dv.getUint32(i * 4, true)));
+  if (words.length % 2) words.push(0n);
+  return words;
+}
+
+function expandSchedule(words, firstWord = 16) {
+  for (let index = firstWord; index < 64; index++) {
+    const x = words[index - 2], y = words[index - 15];
+    const s1 = ((x >> 17n) ^ (x << 15n) ^ (x >> 19n) ^ (x << 13n) ^ (x >> 10n)) & MASK;
+    const s0 = ((y >> 7n) ^ (y << 25n) ^ (y >> 18n) ^ (y << 14n) ^ (y >> 3n)) & MASK;
+    words.push((s1 + words[index - 7] + s0 + words[index - 16]) & MASK);
+  }
+}
+
+function sha256Rounds(state, words, firstRound = 0) {
+  let [a, b, c, d, e, f, g, h] = state;
+  const consts = firstRound === 14 ? K.map((v, i) => (i === 14 ? BigInt(K14) : v)) : K;
+  for (let index = firstRound; index < 64; index++) {
+    const rotE = (e << 32n) | e;
+    const rotA = (a << 32n) | a;
+    const S1 = (rotE >> 6n) ^ (rotE >> 11n) ^ (rotE >> 25n);
+    const t1 = h + S1 + (g ^ (e & (f ^ g))) + consts[index] + words[index];
+    const S0 = (rotA >> 2n) ^ (rotA >> 13n) ^ (rotA >> 22n);
+    const t2 = S0 + ((a & b) | (c & (a | b)));
+    const nh = (t1 + t2) & MASK;
+    [a, b, c, d, e, f, g, h] = [nh, a, b, c, (d + t1) & MASK, e, f, g];
+  }
+  return [a, b, c, d, e, f, g, h];
+}
+
+function sha256Init(data7) {
+  const dv = new DataView(data7.buffer, data7.byteOffset, data7.byteLength);
+  const words = new Array(14).fill(0n);
+  words.push(BigInt((dv.getUint8(0) << 16) | (dv.getUint8(1) << 8) | dv.getUint8(2)));
+  words.push(BigInt(dv.getUint32(3)));
+  for (let index = 16; index < 30; index++) {
+    let value = BigInt(SHA256_SCHEDULE[index - 16]);
+    if (index - 2 >= 14) value += (index === 16 ? (sigma1(words[index - 2]) ^ BigInt(SIGMA1_ADJ)) : sigma1(words[index - 2]));
+    if (index - 7 >= 14) value += words[index - 7];
+    if (index - 15 >= 14) value += (index === 29 ? (sigma0(words[index - 15]) ^ BigInt(SIGMA0_ADJ)) : sigma0(words[index - 15]));
+    words.push(value & MASK);
+  }
+  words.push((sigma1(words[28]) + words[23] + sigma0(words[15]) + words[14] + BigInt(K14) - K[14]) & MASK);
+  expandSchedule(words, 31);
+  const working = sha256Rounds(SHA256_STATE.map(BigInt), words, 14);
+  return SHA256_INITIAL.map((s, i) => (BigInt(s) + working[i]) & MASK);
+}
+
+function sha256Digest(data) {
+  if (data.length < 7) throw new Error("salt too short");
+  const length = 57 + data.length;
+  const rest = data.subarray(7);
+  const totalPadded = Math.ceil((rest.length + 9) / 64) * 64;
+  const padded = new Uint8Array(totalPadded);
+  padded.set(rest, 0);
+  padded[rest.length] = 0x80;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(totalPadded - 8, Math.floor((length * 8) / 2 ** 32));
+  dv.setUint32(totalPadded - 4, (length * 8) >>> 0);
+  let state = sha256Init(data.subarray(0, 7));
+  for (let off = 0; off < totalPadded; off += 64) {
+    const words = [];
+    for (let i = 0; i < 16; i++) words.push(BigInt(dv.getUint32(off + i * 4)));
+    expandSchedule(words, 16);
+    const working = sha256Rounds(state, words, 0);
+    state = state.map((s, i) => (s + working[i]) & MASK);
+  }
+  const out = new Uint8Array(32);
+  const odv = new DataView(out.buffer);
+  state.forEach((w, i) => odv.setUint32(i * 4, Number(w)));
+  return out;
+}
+
+function cs64Digest(data, digest) {
+  const ddv = new DataView(digest.buffer, digest.byteOffset, digest.byteLength);
+  const keyA = ddv.getUint32(0, true) | 1;
+  const keyB = ddv.getUint32(4, true) | 1;
+  const f0 = Math.imul(keyA, CS64_FACTOR) >>> 0;
+  const f1 = Math.imul(keyB, CS64_FACTOR) >>> 0;
+  const terms = [], offsets = [];
+  for (let i = 0; i < 14; i++) {
+    terms.push(Math.imul(CS64_COEF[i][0], i % 2 ? f1 : f0) >>> 0);
+    offsets.push(CS64_COEF[i][1]);
+  }
+  const wbytes = new Uint8Array(data.length + 1);
+  wbytes.set(data, 1);
+  for (const [index, w] of wordsLE4Even(wbytes).entries()) {
+    const word = Number(w);
+    const key = index % 2 ? keyB : keyA;
+    let term = Math.imul(word, key);
+    let offset = Math.imul(Number(rol16(word)), index % 2 ? 0xC31713DB : 0xEF0569FB);
+    if (index === 0) { term = (term + Math.imul(CS64_ADJ0, f0)) >>> 0; offset = (offset + CS64_ADJ1) >>> 0; }
+    terms.push(term >>> 0);
+    offsets.push(offset >>> 0);
+  }
+  let swapAcc = 0, swapLast = 0, state = 0, acc = 0;
+  for (let index = 0; index < terms.length; index += 2) {
+    const x = terms[index], y = terms[index + 1];
+    let t = Number(rol16((offsets[index] + x) >>> 0));
+    let q = Math.imul(t, 0x76F50F34) >>> 0;
+    swapAcc = (swapAcc + ((Math.imul(Number(rol16(q)), 0xC3EFEA97) + q) >>> 0)) >>> 0;
+    t = Number(rol16((offsets[index + 1] + y) >>> 0));
+    q = Math.imul(t, 0x1881CE3C) >>> 0;
+    swapLast = (Math.imul(Number(rol16(q)), 0x35BD1EC9) + q) >>> 0;
+    swapAcc = (swapAcc + swapLast) >>> 0;
+
+    state = (Math.imul(state, keyA) + x) >>> 0;
+    state = Math.imul(Number(rol16(state)), 0xCF98B111) >>> 0;
+    state = Math.imul(Number(rol16(state)), 0x87085B9F) >>> 0;
+    state = Math.imul(Number(rol16(state)), 0x12CEB96D) >>> 0;
+    state = Math.imul(Number(rol16(state)), 0x257E1D83) >>> 0;
+    acc = (acc + state) >>> 0;
+    t = (Math.imul(state, keyB) + y) >>> 0;
+    t = Math.imul(Number(rol16(t)), 0xA27416F5) >>> 0;
+    t = Math.imul(Number(rol16(t)), 0xD38396FF) >>> 0;
+    state = Math.imul(Number(rol16(Math.imul(Number(rol16(t)), 0x7C932B89) >>> 0)), 0xBFA49F69) >>> 0;
+    acc = (acc + state) >>> 0;
+  }
+  return [swapLast ^ state, swapAcc ^ acc];
+}
+
+function generateSecMsGecV2(unixSeconds) {
+  let ticks = unixSeconds + WIN_EPOCH;
+  ticks -= ticks % 300;
+  ticks *= 1e7;
+  const str = `${ticks.toFixed(0)}${EDGE_TKN}`;
+  const data = new TextEncoder().encode(str);
+  const digest = sha256Digest(data);
+  const [cs0, cs1] = cs64Digest(data, digest);
+  const csHex = [cs0, cs1].map((v) => { const b = (v >>> 0).toString(16).padStart(8, "0"); return (b[6]+b[7]+b[4]+b[5]+b[2]+b[3]+b[0]+b[1]); }).join("").toUpperCase();
+  const dHex = [...digest].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  return `${csHex}-${dHex}`;
+}
+
+
+// ===== Edge TTS (Microsoft) — קול עברי חינמי, עיקרי =====
+var EDGE_TTS_VOICE = "he-IL-AvriNeural";
+function edgeDateString() {
+  const d = /* @__PURE__ */ new Date();
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const p2 = (n) => String(n).padStart(2, "0");
+  return days[d.getUTCDay()] + " " + months[d.getUTCMonth()] + " " + p2(d.getUTCDate()) + " " + d.getUTCFullYear() + " " + p2(d.getUTCHours()) + ":" + p2(d.getUTCMinutes()) + ":" + p2(d.getUTCSeconds()) + " GMT+0000 (Coordinated Universal Time)";
+}
+function edgeEscapeXml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function edgeConcat(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+async function edgeTtsMp3(text, timeoutMs = 15000) {
+  try {
+    const gec = generateSecMsGecV2(Date.now() / 1000);
+    const connId = crypto.randomUUID().replace(/-/g, "");
+    const muid = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    const url = "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=" + connId + "&Sec-MS-GEC=" + gec + "&Sec-MS-GEC-Version=2-143.0.3650.75";
+    const keyBytes = crypto.getRandomValues(new Uint8Array(16));
+    const secKey = btoa(String.fromCharCode(...keyBytes));
+    const resp = await fetch(url, { headers: {
+      "Upgrade": "websocket", "Connection": "Upgrade",
+      "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": secKey,
+      "Origin": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
+      "Cache-Control": "no-cache", "Pragma": "no-cache",
+      "Cookie": "muid=" + muid + ";",
+    } });
+    if (!resp.webSocket) { logEvent("edge_ws_refused", {}); return null; }
+    const ws = resp.webSocket;
+    ws.accept();
+    return await new Promise((resolve) => {
+      const chunks = [];
+      let done = false;
+      const finish = (val) => { if (!done) { done = true; clearTimeout(timer); try { ws.close(); } catch (_) {} resolve(val); } };
+      const timer = setTimeout(() => finish(chunks.length ? edgeConcat(chunks) : null), timeoutMs);
+      ws.addEventListener("message", (ev) => {
+        const d = ev.data;
+        if (typeof d === "string") {
+          if (d.includes("Path:turn.end")) finish(chunks.length ? edgeConcat(chunks) : null);
+          return;
+        }
+        Promise.resolve(d instanceof ArrayBuffer ? new Uint8Array(d) : d && d.arrayBuffer ? new Uint8Array(d.arrayBuffer()) : ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : null).then((u8) => {
+          if (!u8 || u8.length < 2) return;
+          const headerLen = (u8[0] << 8) | u8[1];
+          if (headerLen > u8.length) return;
+          const header = new TextDecoder().decode(u8.subarray(2, headerLen));
+          if (header.includes("Path:audio")) {
+            let start = headerLen;
+            if (u8[start] === 13 && u8[start + 1] === 10) start += 2;
+            chunks.push(u8.subarray(start));
+          }
+        });
+      });
+      ws.addEventListener("close", () => finish(chunks.length ? edgeConcat(chunks) : null));
+      ws.addEventListener("error", () => finish(null));
+      const ts = edgeDateString();
+      ws.send("X-Timestamp:" + ts + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n" + '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n');
+      const ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='" + EDGE_TTS_VOICE + "'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>" + edgeEscapeXml(text) + "</prosody></voice></speak>";
+      ws.send("X-RequestId:" + connId + "\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:" + ts + "Z\r\nPath:ssml\r\n\r\n" + ssml);
+    });
+  } catch (e) {
+    logEvent("edge_tts_error", { type: e?.name || "Error" });
+    return null;
+  }
+}
+
 async function ttsTextToYemotFile(env, text) {
   const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
   if (!YEMOT_TOKEN || !String(text || "").trim()) return null;
+  let blob = await edgeTtsMp3(String(text || ""));
+  if (blob && blob.length) {
+    logEvent("tts_edge_ok", { size: blob.length });
+  } else {
+    logEvent("tts_edge_failed", {});
   try {
     const chunks = splitTtsChunks(text, 180);
     const parts = await Promise.all(chunks.map((q, i) => fetch("https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=iw&total=" + chunks.length + "&idx=" + i + "&textlen=" + q.length + "&q=" + encodeURIComponent(q), { headers: { "User-Agent": "Mozilla/5.0" } }).then((r) => r.ok ? r.arrayBuffer() : null).catch(() => null)));
@@ -149,26 +397,32 @@ async function ttsTextToYemotFile(env, text) {
     let total = 0;
     for (const p of parts) total += p.byteLength;
     if (!total) return null;
-    const blob = new Uint8Array(total);
+    blob = new Uint8Array(total);
     let off = 0;
     for (const p of parts) {
       const arr = new Uint8Array(p);
       blob.set(arr, off);
       off += arr.length;
     }
+  } catch (e) {
+    logEvent("tts_error", { type: e?.name || "Error" });
+    return null;
+  }
+  }
+  try {
     const fname = Date.now() + "_" + Math.floor(Math.random() * 1e4) + ".wav";
     const fd = new FormData();
     fd.append("file", new Blob([blob], { type: "audio/mpeg" }), "a.mp3");
     const upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${YEMOT_TOKEN}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd });
     const upData = await upRes.json().catch(() => null);
     if (upData && upData.responseStatus === "OK") {
-      logEvent("tts_file_uploaded", { ms: Date.now(), size: total });
+      logEvent("tts_file_uploaded", { ms: Date.now(), size: blob.length });
       return "/9/r/" + fname.replace(/\.wav$/, "");
     }
     logEvent("tts_upload_failed", { status: upData?.responseStatus || "err" });
     return null;
   } catch (e) {
-    logEvent("tts_error", { type: e?.name || "Error" });
+    logEvent("tts_upload_error", { type: e?.name || "Error" });
     return null;
   }
 }
@@ -300,6 +554,78 @@ var worker_default = {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       const k = url.searchParams.get("k") || "";
       if (!k) return Response.json({ error: "missing k" });
+      if (k === "tts_full_diag") {
+        const text = url.searchParams.get("text") || "בדיקת הקראה מלאה";
+        const f = await ttsTextToYemotFile(env, text);
+        let uploadInfo = null;
+        if (!f) {
+          try {
+            const mp3 = await edgeTtsMp3(text);
+            if (mp3) {
+              const fname = Date.now() + "_diag.wav";
+              const fd = new FormData();
+              fd.append("file", new Blob([mp3], { type: "audio/mpeg" }), "a.mp3");
+              const upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${env.YEMOT_TOKEN || ""}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd });
+              uploadInfo = await upRes.text().catch(() => "upload_err");
+            } else uploadInfo = "edge_null";
+          } catch (e) { uploadInfo = "exc: " + String(e?.message || e); }
+        }
+      }
+      if (k === "edge_tts_diag") {
+        const text = url.searchParams.get("text") || "בדיקת קול עברי";
+        let result = { stage: "start" };
+        try {
+          const gec = generateSecMsGecV2(Date.now() / 1000);
+          result.gec = gec;
+          const connId = crypto.randomUUID().replace(/-/g, "");
+          const muid = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+          const wurl = "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=" + connId + "&Sec-MS-GEC=" + gec + "&Sec-MS-GEC-Version=2-143.0.3650.75";
+          const keyBytes = crypto.getRandomValues(new Uint8Array(16));
+          const secKey = btoa(String.fromCharCode(...keyBytes));
+          const resp = await fetch(wurl, { headers: {
+            "Upgrade": "websocket", "Connection": "Upgrade",
+            "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": secKey,
+            "Origin": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0",
+            "Cache-Control": "no-cache", "Pragma": "no-cache",
+            "Cookie": "muid=" + muid + ";",
+          } });
+          result.httpStatus = resp.status;
+          result.hasWs = Boolean(resp.webSocket);
+          if (resp.webSocket) {
+            const ws = resp.webSocket;
+            ws.accept();
+            const audio = await new Promise((resolve) => {
+              const chunks = [];
+              const timer = setTimeout(() => resolve({ to: true, chunks }), 12000);
+              ws.addEventListener("message", (ev) => {
+                const d = ev.data;
+                if (typeof d === "string") {
+                  if (d.includes("Path:turn.end")) { clearTimeout(timer); resolve({ to: false, chunks }); try { ws.close(); } catch (_) {} }
+                  else if (d.includes("Path:turn.start")) result.turnStart = true;
+                  return;
+                }
+                Promise.resolve(d instanceof ArrayBuffer ? new Uint8Array(d) : d && d.arrayBuffer ? new Uint8Array(d.arrayBuffer()) : null).then((u8) => {
+                  if (u8 && u8.length > 2) chunks.push(u8.length);
+                });
+              });
+              ws.addEventListener("error", () => { clearTimeout(timer); resolve({ wsError: true, chunks }); });
+              ws.addEventListener("close", () => { clearTimeout(timer); resolve({ closed: true, chunks }); });
+              const ts = edgeDateString();
+              ws.send("X-Timestamp:" + ts + "\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n" + '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n');
+              const ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='he-IL-AvriNeural'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>" + edgeEscapeXml(text) + "</prosody></voice></speak>";
+              ws.send("X-RequestId:" + connId + "\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:" + ts + "Z\r\nPath:ssml\r\n\r\n" + ssml);
+            });
+            result.audioFrames = audio.chunks?.length || 0;
+            result.audioBytes = (audio.chunks || []).reduce((a, b) => a + b, 0);
+            result.detail = audio.to ? "timeout" : audio.wsError ? "ws_error" : audio.closed ? "closed_early" : "done";
+          }
+        } catch (e) {
+          result.err = String(e?.message || e);
+          result.errType = e?.name || "Error";
+        }
+        return Response.json(result);
+      }
       if (k === "bridge_diag") {
         const acct = url.searchParams.get("bridge") === "2" ? 2 : 1;
         const act = url.searchParams.get("action") || "list";
@@ -479,12 +805,53 @@ var worker_default = {
       const clockGlued = transcribedText.replace(/\s+/g, "");
       const clockFast = (/(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(transcribedText) || /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(clockGlued)) && !/(?:מייל|אימייל|צאט|שלח|תשלח|שלוח|תעביר|דולר|אירו|יורו|מזג|ביטקוין|ביקוד|קריפטו)/.test(transcribedText);
       if (clockFast) {
-        const CITY_TZ = { "\u05E0\u05D9\u05D5 \u05D9\u05D5\u05E8\u05E7": "America/New_York", "\u05DC\u05D5\u05E0\u05D3\u05D5\u05DF": "Europe/London", "\u05E4\u05E8\u05D9\u05D6": "Europe/Paris", "\u05D8\u05D5\u05E7\u05D9\u05D5": "Asia/Tokyo", "\u05DC\u05D5\u05E1 \u05D0\u05E0\u05D2\u05DC\u05E1": "America/Los_Angeles", "\u05D1\u05E8\u05DC\u05D9\u05DF": "Europe/Berlin", "\u05DE\u05D5\u05E1\u05E7\u05D1\u05D4": "Europe/Moscow", "\u05D0\u05DE\u05E1\u05D8\u05E8\u05D3\u05DD": "Europe/Amsterdam" };
-        const askedCity = Object.keys(CITY_TZ).find((c) => transcribedText.includes(c));
+        const WORLD_TZ = [
+          { tz: "America/New_York", names: ["\u05E0\u05D9\u05D5 \u05D9\u05D5\u05E8\u05E7", "\u05D5\u05D5\u05E9\u05D9\u05E0\u05D2\u05D8\u05D5\u05DF", "\u05DE\u05D9\u05D0\u05DE\u05D9", "\u05E4\u05D9\u05DC\u05D3\u05DC\u05E4\u05D9\u05D4"] },
+          { tz: "America/Chicago", names: ["\u05E9\u05D9\u05E7\u05D2\u05D5", "\u05D9\u05D5\u05E1\u05D8\u05D5\u05DF", "\u05D3\u05E0\u05D5\u05D5\u05E8"] },
+          { tz: "America/Denver", names: ["\u05D3\u05E0\u05D5\u05D5\u05E8 \u05E7\u05D5\u05DC\u05D5\u05E8\u05D3\u05D5"] },
+          { tz: "America/Los_Angeles", names: ["\u05DC\u05D5\u05E1 \u05D0\u05E0\u05D2\u05DC\u05E1", "\u05DC\u05D5\u05E1 \u05D5\u05D0\u05E0\u05D2\u05DC\u05E1", "\u05D5\u05D2\u05D0\u05E1", "\u05E1\u05D0\u05DF \u05E4\u05E8\u05E0\u05E1\u05D9\u05E1\u05E7\u05D5"] },
+          { tz: "America/Toronto", names: ["\u05D8\u05D5\u05E8\u05D5\u05E0\u05D8\u05D5", "\u05D0\u05D5\u05D8\u05D5\u05D5\u05D4"] },
+          { tz: "America/Mexico_City", names: ["\u05DE\u05E7\u05E1\u05D9\u05E7\u05D5"] },
+          { tz: "America/Argentina/Buenos_Aires", names: ["\u05D1\u05D5\u05D0\u05E0\u05D5\u05E1 \u05D0\u05D9\u05D9\u05E8\u05E1"] },
+          { tz: "America/Sao_Paulo", names: ["\u05E8\u05D9\u05D5 \u05D3\u05D5 \u05D2\u05E0\u05D9\u05D5\u05E8\u05D5", "\u05E1\u05D0\u05D5 \u05E4\u05D0\u05D5\u05DC\u05D5", "\u05E1\u05D0\u05D5 \u05E4\u05D0\u05D5\u05DC\u05D5"] },
+          { tz: "Europe/London", names: ["\u05DC\u05D5\u05E0\u05D3\u05D5\u05DF", "\u05DC\u05D5\u05E0\u05D3\u05D5\u05E0\u05D9"] },
+          { tz: "Europe/Paris", names: ["\u05E4\u05E8\u05D9\u05D6", "\u05E4\u05E8\u05D9\u05E1"] },
+          { tz: "Europe/Berlin", names: ["\u05D1\u05E8\u05DC\u05D9\u05DF", "\u05DE\u05D9\u05E0\u05DB\u05DF", "\u05E4\u05E8\u05E0\u05E7\u05E4\u05D5\u05E8\u05D8"] },
+          { tz: "Europe/Amsterdam", names: ["\u05D0\u05DE\u05E1\u05D8\u05E8\u05D3\u05DD", "\u05D0\u05DE\u05E1\u05D8\u05E8\u05D3\u05DF"] },
+          { tz: "Europe/Rome", names: ["\u05E8\u05D5\u05DE\u05D0", "\u05E8\u05D5\u05DE\u05D9", "\u05DE\u05D9\u05DC\u05D0\u05E0\u05D5"] },
+          { tz: "Europe/Madrid", names: ["\u05DE\u05D3\u05E8\u05D9\u05D3"] },
+          { tz: "Europe/Vienna", names: ["\u05D5\u05D9\u05E0\u05D4"] },
+          { tz: "Europe/Zurich", names: ["\u05D6\u05D9\u05E8\u05D9\u05DA", "\u05E6\u05D9\u05E8\u05D9\u05DA"] },
+          { tz: "Europe/Prague", names: ["\u05E4\u05E8\u05D0\u05D2"] },
+          { tz: "Europe/Budapest", names: ["\u05D1\u05D5\u05D3\u05E4\u05E9\u05D8"] },
+          { tz: "Europe/Warsaw", names: ["\u05D5\u05E8\u05E9\u05D4"] },
+          { tz: "Europe/Kyiv", names: ["\u05E7\u05D9\u05D9\u05D1", "\u05E7\u05D9\u05D1\u05D5"] },
+          { tz: "Europe/Moscow", names: ["\u05DE\u05D5\u05E1\u05E7\u05D1\u05D4", "\u05DE\u05D5\u05E1\u05E7\u05D1\u05D0"] },
+          { tz: "Europe/Athens", names: ["\u05D0\u05EA\u05D5\u05E0\u05D4"] },
+          { tz: "Europe/Istanbul", names: ["\u05D0\u05D9\u05E1\u05D8\u05E0\u05D1\u05D5\u05DC", "\u05D0\u05D9\u05E1\u05D8\u05DE\u05D1\u05D5\u05DC"] },
+          { tz: "Europe/Bucharest", names: ["\u05D1\u05D5\u05E7\u05E8\u05E9\u05D8"] },
+          { tz: "Europe/Lisbon", names: ["\u05DC\u05D9\u05E1\u05D1\u05D5\u05E0\u05D4"] },
+          { tz: "Europe/Stockholm", names: ["\u05E1\u05D8\u05D5\u05E7\u05D4\u05D5\u05DC\u05DD", "\u05E1\u05D8\u05D5\u05E7\u05D4\u05D5\u05DC\u05DD"] },
+          { tz: "Europe/Copenhagen", names: ["\u05E7\u05D5\u05E4\u05E0\u05D4\u05D2\u05DF"] },
+          { tz: "Asia/Dubai", names: ["\u05D3\u05D5\u05D1\u05D0\u05D9", "\u05D3\u05D5\u05D1\u05D9"] },
+          { tz: "Asia/Bangkok", names: ["\u05D1\u05E0\u05D2\u05E7\u05D5\u05E7"] },
+          { tz: "Asia/Kolkata", names: ["\u05D3\u05DC\u05D4\u05D9", "\u05DE\u05D5\u05DE\u05D1\u05D0\u05D9", "\u05E7\u05DC\u05E7\u05D5\u05D8\u05D4"] },
+          { tz: "Asia/Singapore", names: ["\u05E1\u05D9\u05E0\u05D2\u05E4\u05D5\u05E8"] },
+          { tz: "Asia/Hong_Kong", names: ["\u05D4\u05D5\u05E0\u05D2 \u05E7\u05D5\u05E0\u05D2"] },
+          { tz: "Asia/Shanghai", names: ["\u05D1\u05D9\u05D9\u05D2'\u05D9\u05DF", "\u05E9\u05E0\u05D2\u05D7\u05D0\u05D9", "\u05E9\u05E0\u05D2\u05D7\u05D0\u05D9"] },
+          { tz: "Asia/Tokyo", names: ["\u05D8\u05D5\u05E7\u05D9\u05D5"] },
+          { tz: "Australia/Sydney", names: ["\u05E1\u05D9\u05D3\u05E0\u05D9", "\u05DE\u05DC\u05D1\u05D5\u05E8\u05DF"] },
+          { tz: "Pacific/Auckland", names: ["\u05D0\u05D5\u05E7\u05DC\u05E0\u05D3"] },
+          { tz: "Africa/Cairo", names: ["\u05E7\u05D4\u05D9\u05E8"] },
+          { tz: "Africa/Johannesburg", names: ["\u05D9\u05D5\u05D4\u05E0\u05E1\u05D1\u05D5\u05E8\u05D2"] }
+        ];
+        const _wEntry = WORLD_TZ.find((e) => e.names.some((nm) => transcribedText.includes(nm)));
+        const askedCity = _wEntry ? _wEntry.names[0] : null;
+        const askedTz = _wEntry ? _wEntry.tz : null;
         if (askedCity) {
           try {
             const _cn = new Date();
-            const _ct = _cn.toLocaleTimeString("he-IL", { timeZone: CITY_TZ[askedCity], hour: "2-digit", minute: "2-digit", hour12: false });
+            const _ct = _cn.toLocaleTimeString("he-IL", { timeZone: askedTz, hour: "2-digit", minute: "2-digit", hour12: false });
             const _numH = parseInt(_ct.split(":")[0], 10), _numM = parseInt(_ct.split(":")[1], 10);
             return textResponse("id_list_message=t-\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 \u05D1" + askedCity + " " + hebNumWords(_numH) + " \u05D5" + hebNumWords(_numM));
           } catch (_) {
@@ -525,7 +892,7 @@ var worker_default = {
       const _weatherQ = /(?:מ[זס]ג\s*ה?\s*או\s*ו?ו?\s*י\s*ר|תח[זס]י[תהונ]|כמה מעלות|טמפרטורה|מ[זס]ג\s*ה?אויר)/.test(transcribedText);
       if (_weatherQ && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
         try {
-          const _WCITIES = { "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD": [31.78, 35.22], "\u05E4\u05EA\u05D7 \u05EA\u05E7\u05D5\u05D5\u05D4": [32.09, 34.89], "\u05E8\u05D0\u05E9 \u05D4\u05E2\u05D9\u05DF": [32.09, 34.95], "\u05D7\u05D9\u05E4\u05D4": [32.79, 34.99], "\u05D1\u05D0\u05E8 \u05E9\u05D1\u05E2": [31.25, 34.79], "\u05D0\u05D9\u05DC\u05EA": [29.55, 34.95], "\u05E0\u05EA\u05E0\u05D9\u05D4": [32.33, 34.86], "\u05D0\u05E9\u05D3\u05D5\u05D3": [31.8, 34.65], "\u05E6\u05E4\u05EA": [32.96, 35.5], "\u05D8\u05D1\u05E8\u05D9\u05D4": [32.79, 35.53], "\u05E8\u05D7\u05D5\u05D1\u05D5\u05EA": [31.9, 34.9], "\u05EA\u05DC \u05D0\u05D1\u05D9\u05D1": [32.08, 34.78], "\u05E8\u05D0\u05E9\u05D5\u05DF \u05DC\u05E6\u05D9\u05D5\u05DF": [31.96, 34.87], "\u05E8\u05DE\u05EA \u05D2\u05DF": [32.07, 34.82], "\u05D1\u05E0\u05D9 \u05D1\u05E8\u05E7": [32.08, 34.84], "\u05D7\u05D3\u05E8\u05D4": [32.44, 34.92], "\u05D4\u05E8\u05E6\u05DC\u05D9\u05D4": [32.16, 34.84], "\u05DB\u05E4\u05E8 \u05E1\u05D1\u05D0": [32.17, 34.94], "\u05DE\u05D5\u05D3\u05D9\u05E2\u05D9\u05DF": [31.9, 35.01], "\u05D0\u05E9\u05E7\u05DC\u05D5\u05DF": [31.67, 34.57], "\u05D1\u05EA \u05D9\u05DD": [32.01, 34.75], "\u05D2\u05D1\u05E2\u05EA\u05D9\u05D9\u05DD": [32.07, 34.81], "\u05D9\u05D1\u05E0\u05D4": [31.87, 34.74], "\u05E2\u05E4\u05D5\u05DC\u05D4": [32.61, 35.29], "\u05D1\u05D9\u05EA \u05E9\u05DE\u05E9": [31.74, 34.99], "\u05E0\u05D4\u05E8\u05D9\u05D4": [32.98, 35.09], "\u05E7\u05E8\u05D9\u05EA \u05E9\u05DE\u05D5\u05E0\u05D4": [33.21, 35.57], "\u05E7\u05E8\u05D9\u05EA \u05D2\u05EA": [31.61, 34.77] };
+          const _WCITIES = {"צפון":[32.85,35.3],"דרום":[31.05,34.85],"מרכז":[32.05,34.85],"שפלה":[31.85,34.85],"ירקון":[32.1,34.92],"שרון":[32.35,34.95],"גוש דן":[32.05,34.82],"נגב":[31.0,34.9],"גליל":[33.0,35.4],"עמק יזרעאל":[32.6,35.25],"כרמל":[32.75,35.0],"שומרון":[32.2,35.2],"יהודה":[31.7,35.1],"בקעה":[31.4,35.3],"ערבה":[30.5,35.0],"גלבוע":[32.5,35.4],"חוף":[32.1,34.8],"קָצִיר":[32.705,35.618],"תל קציר":[32.705,35.618],"עין קיניא":[33.238,35.731],"עין קניה":[33.238,35.731],"אֵילִיָּה קַפִּיטוֹלִינָה":[31.769,35.216],"הַקֹּדֶשׁ":[31.769,35.216],"יְבוּס":[31.769,35.216],"יְרוּשְׁלֶם":[31.769,35.216],"יְרוּשָׁלַיִם":[31.769,35.216],"יְרוּשָׁלַםִ":[31.769,35.216],"יְרוּשָׁלָםִ":[31.769,35.216],"יבוס":[31.769,35.216],"ירושלים":[31.769,35.216],"ירושלם":[31.769,35.216],"מוֹרִיָּה":[31.769,35.216],"מוריה":[31.769,35.216],"צִיּוֹן":[31.769,35.216],"ציון":[31.769,35.216],"שָׁלֵם":[31.769,35.216],"שלם":[31.769,35.216],"אבו תור":[31.767,35.233],"גבעת חנניה":[31.767,35.233],"הר אדר":[31.828,35.131],"תְּקוֹעַ":[31.654,35.228],"תקוע":[31.654,35.228],"מִצְפֵּה יְרִיחוֹ":[31.817,35.394],"מצפה יריחו":[31.817,35.394],"מודיעין":[31.894,35.015],"מודיעין מכבים רעות":[31.894,35.015],"מכבים רעות":[31.894,35.015],"רעות":[31.894,35.015],"כּוֹכַב הַשַּׁחַר":[31.96,35.349],"כוכב השחר":[31.96,35.349],"אלעזר":[31.66,35.143],"צור משה":[32.298,34.912],"צור הדסה":[31.719,35.097],"זִכְרוֹן יַעֲקֹב":[32.569,34.954],"זיכרון יעקב":[32.569,34.954],"זכרון יעקב":[32.569,34.954],"צפת":[32.965,35.496],"זלפה":[32.551,35.187],"יָקְנְעָם עילית":[32.647,35.092],"יוקנעם עילית":[32.647,35.092],"יקנעם עלית":[32.647,35.092],"יִרְכָּא":[32.954,35.212],"ירכא":[32.954,35.212],"יְסוּד הַמַּעֲלָ":[33.059,35.608],"יְסוּד הַמַּעֲלָה":[33.059,35.608],"יסוד המעלה":[33.059,35.608],"ירוחם":[30.988,34.932],"ירחם":[30.988,34.932],"יהוד":[32.033,34.891],"בית גן":[32.706,35.504],"יבנאל":[32.706,35.504],"משמר השלושה":[32.706,35.504],"יבנה":[31.878,34.74],"יגור":[32.743,35.078],"יפו":[32.05,34.752],"יפא":[32.689,35.278],"יפיע":[32.689,35.278],"יַד בִּנְיָמִין":[31.797,34.821],"יד בנימין":[31.797,34.821],"מרכז חנוכי":[31.797,34.821],"עֻזֵיר":[32.791,35.325],"עוזייר":[32.791,35.325],"עזיר":[32.791,35.325],"אם אל פחם":[32.518,35.154],"טובא זנגריה":[32.966,35.593],"טירת כרמל":[32.76,34.969],"תִּפְרַח":[31.327,34.677],"תפרח":[31.327,34.677],"טבריה":[32.794,35.532],"תל מונד":[32.253,34.918],"תל אביב":[32.081,34.781],"תֵּל עֲדָשִׁים":[32.657,35.302],"תל עדשים":[32.657,35.302],"מעלות תרשיחא":[33.017,35.267],"טמרה":[32.853,35.199],"תמרה":[32.853,35.199],"סולם":[32.606,35.334],"שונם":[32.606,35.334],"ביתניה הדרומית":[31.774,34.684],"שְׁתוּלִים":[31.774,34.684],"שתולים":[31.774,34.684],"שלומי":[33.072,35.145],"שְׁפַרְעָם":[32.806,35.169],"שפרעם":[32.806,35.169],"בית יצחק שער חפר":[32.334,34.89],"שַׁעַר אֶפְרַיִם":[32.29,34.997],"שער אפרים":[32.29,34.997],"שַׁעַלְבִים":[31.87,34.987],"שעלבים":[31.87,34.987],"שַׁעַבּ":[32.89,35.239],"שאב":[32.89,35.239],"שעב":[32.89,35.239],"שְׂדֵה עוֹזִיָּהוּ":[31.757,34.679],"שדה עוזיהו":[31.757,34.679],"שדרות":[31.525,34.597],"סַבְיוֹן":[32.05,34.878],"סביון":[32.05,34.878],"סַנְדַלָה":[32.522,35.324],"צַנְדַלָה":[32.522,35.324],"צנדלה":[32.522,35.324],"סִכְנִין":[32.865,35.298],"סכנין":[32.865,35.298],"ראש פינה":[32.969,35.542],"ראש פנה":[32.969,35.542],"ראש העין":[32.095,34.954],"ראשון לציון":[31.971,34.789],"רכסים":[32.75,35.101],"רחובות":[31.894,34.812],"רמלה":[31.926,34.864],"רמת ישי":[32.701,35.164],"רמת השרון":[32.146,34.839],"רמת גן":[32.082,34.811],"רָמָה":[32.939,35.366],"ראמה":[32.939,35.366],"רמה":[32.939,35.366],"רעננה":[32.184,34.874],"כפר הנוער קרית יערים":[31.803,35.102],"קִרְיַת יְעָרִים":[31.803,35.102],"קרית יערים":[31.803,35.102],"קריית ים":[32.85,35.07],"קרית ים":[32.85,35.07],"קרית ימ":[32.85,35.07],"קִרְיַת טִבְעוֹן":[32.712,35.125],"קריית טבעון":[32.712,35.125],"קרית טבעון":[32.712,35.125],"קריית שמונה":[33.212,35.57],"קרית שמונה":[33.212,35.57],"קריית מוצקין":[32.837,35.078],"קרית מוצקון":[32.837,35.078],"קִרְיַת מַלְאָכִי":[31.729,34.746],"קריית מלאכי":[31.729,34.746],"קרית מלאכי":[31.729,34.746],"קריית גת":[31.61,34.764],"קרית גת":[31.61,34.764],"קריית ביאליק":[32.828,35.086],"קרית ביאליק":[32.828,35.086],"קריית אתא":[32.811,35.113],"קרית אתא":[32.811,35.113],"קִדְרוֹן":[31.814,34.797],"קדרון":[31.814,34.797],"קלנסוה":[32.285,34.981],"קלנסווה":[32.285,34.981],"פתח תיקוה":[32.089,34.887],"פתח תיקווה":[32.089,34.887],"פתח תקוה":[32.089,34.887],"פתח תקווה":[32.089,34.887],"פרדסיה":[32.307,34.911],"פרדסייה":[32.307,34.911],"פרדס חנה כרכור":[32.474,34.978],"אור יהודה":[32.029,34.858],"אור עקיבא":[32.506,34.921],"עֹמֶר":[31.265,34.848],"עומר":[31.265,34.848],"עמר":[31.265,34.848],"אופקים":[31.314,34.62],"אפקים":[31.314,34.62],"נוֹרְדִיָּה":[32.314,34.896],"נורדיה":[32.314,34.896],"נורדייה":[32.314,34.896],"נתיבות":[31.423,34.589],"נתניה":[32.333,34.859],"נס ציונה":[31.929,34.799],"נשר":[32.766,35.044],"ניין":[32.63,35.349],"נין":[32.63,35.349],"נעים":[32.63,35.349],"נחלים":[32.06,34.911],"נוֹף הַגָּלִיל":[32.708,35.325],"נוף הגליל":[32.708,35.325],"נצרת עלית":[32.708,35.325],"נצרת":[32.701,35.297],"נָעוּרָה":[32.614,35.392],"נעורה":[32.614,35.392],"נחף":[32.933,35.318],"נהריה":[33.009,35.098],"נַעַן":[31.883,34.858],"נען":[31.883,34.858],"מוסמוס":[32.545,35.155],"מצמץ":[32.545,35.155],"מֻקֵיבִּלָה":[32.514,35.296],"מקיבלה":[32.514,35.296],"מצפה רמון":[30.609,34.801],"מיעיליא":[33.028,35.256],"מעיליא":[33.028,35.256],"מעליא":[33.028,35.256],"מגדל העמק":[32.678,35.242],"מִגְדָּל":[32.839,35.502],"מגדל":[32.839,35.502],"מבשרת ציון":[31.802,35.151],"מטלה":[33.279,35.579],"מזכרת בתיה":[31.854,34.846],"בית כרם":[32.921,35.254],"מראר":[32.889,35.408],"מַעְגָלִים":[31.397,34.599],"מעגלים":[31.397,34.599],"מַעֲגַן מִיכָאֵל":[32.555,34.916],"מעגן מיכאל":[32.555,34.916],"לד":[31.947,34.89],"לוד":[31.947,34.89],"חרבת מיסר":[32.445,35.042],"מֵיסִר":[32.445,35.042],"מיסר":[32.445,35.042],"כפר יונה":[32.315,34.936],"כְּפַר וִיתְקִין":[32.38,34.875],"כפר ויתקין":[32.38,34.875],"כפר תבור":[32.688,35.42],"כְּפַר סִירְקִין":[32.077,34.925],"כפר סירקין":[32.077,34.925],"כפר שמריהו":[32.185,34.821],"כפר סבא":[32.175,34.907],"כְּפַר הֶס":[32.247,34.936],"כפר הס":[32.247,34.936],"דחן":[31.739,34.63],"כפר הנוער ניצנים":[31.739,34.63],"ניצן":[31.739,34.63],"נצן":[31.739,34.63],"כְּפַר חַבָּד":[31.988,34.852],"קִרְיַת עֶקְרוֹן":[31.861,34.823],"קרית עקרון":[31.861,34.823],"כרמיאל":[32.91,35.298],"כַּפְר יָסִיף":[32.955,35.162],"כפר יסיף":[32.955,35.162],"כַּפְר קָאסִם":[32.114,34.976],"כפר קסם":[32.114,34.976],"כַּפְר קַרִע":[32.505,35.052],"כפר קרע":[32.505,35.052],"כפר מצר":[32.645,35.421],"כפר מנדא":[32.811,35.261],"כפר כנא":[32.747,35.342],"כפר כמא":[32.722,35.44],"כַּפְר בַּרָא":[32.131,34.971],"כפר ברא":[32.131,34.971],"כאבול":[32.869,35.212],"כבול":[32.869,35.212],"גּוּשׁ חָלָב":[33.022,35.447],"גוש חלב":[33.022,35.447],"תל גת":[32.398,35.038],"גַ׳לְג׳וּלְיָה":[32.152,34.955],"גלגל":[32.152,34.955],"חוסיפה":[32.718,35.065],"עספיא":[32.718,35.065],"עִלּוּט":[32.718,35.26],"עילוט":[32.718,35.26],"עלוט":[32.718,35.26],"אכסל":[32.682,35.324],"כסלות תבור":[32.682,35.324],"אבטין":[32.761,35.114],"אבלים":[32.822,35.193],"אעבלין":[32.822,35.193],"חורפיש":[33.018,35.348],"חרפיש":[33.018,35.348],"חולון":[32.01,34.779],"הוד השרון":[32.159,34.893],"חוד השרון":[32.159,34.893],"הרצליה":[32.166,34.825],"הרצלייה":[32.166,34.825],"חיפה":[32.813,34.999],"חפה":[32.813,34.999],"חצור הגלילית":[32.982,35.545],"חדרה":[32.442,34.904],"גבעת שמואל":[32.078,34.849],"גיבעת שמואל":[32.078,34.849],"גִּבְעַת בְּרֶנֶר":[31.867,34.801],"גבעת ברנר":[31.867,34.801],"גבעתיים":[32.072,34.813],"גבעתים":[32.072,34.813],"גיבעתיים":[32.072,34.813],"גֶּשֶׁר הַזִּיו":[33.04,35.112],"גשר הזיו":[33.04,35.112],"גדרה":[31.815,34.78],"גן יבנה":[31.787,34.707],"גני תיקווה":[32.06,34.873],"גני תקוה":[32.06,34.873],"גני תקווה":[32.06,34.873],"מפשטה":[33.049,35.309],"פַסּוּטָה":[33.049,35.309],"פסוטה":[33.049,35.309],"אבן יהודה":[32.272,34.886],"אבן שמואל":[31.576,34.763],"א טירה":[32.234,34.95],"טירה":[32.234,34.95],"א טיבה":[32.266,35.009],"טַּיִּבָּה":[32.604,35.444],"טיבה":[32.604,35.444],"א רינה":[32.722,35.316],"ריינה":[32.722,35.316],"עֵין וֶרֶד":[32.267,34.933],"עין ורד":[32.267,34.933],"עֵין שָׂרִיד":[32.274,34.934],"עין שריד":[32.274,34.934],"אליכין":[32.408,34.925],"אל מזרעה":[32.983,35.098],"מזרעה":[32.983,35.098],"אל פרידיס":[32.597,34.953],"פֻרֵידִיס":[32.597,34.953],"פארדיס":[32.597,34.953],"פורידיס":[32.597,34.953],"אילת":[29.558,34.948],"עֵין מָהִל":[32.723,35.353],"עין מאהל":[32.723,35.353],"עין מהל":[32.723,35.353],"עֵילַבּוּ":[32.837,35.401],"עַילַבּוּן":[32.837,35.401],"עילבון":[32.837,35.401],"דימונה":[31.071,35.033],"דֵיר חַנָּא":[32.862,35.364],"דיר חנא":[32.862,35.364],"דליית אל כרמל":[32.694,35.047],"דלית אל כרמל":[32.694,35.047],"עיר הכרמל":[32.694,35.047],"דבוריה":[32.693,35.371],"בקיעה":[32.978,35.334],"פְּקִיעִין":[32.978,35.334],"פקיעין":[32.978,35.334],"בועינה":[32.806,35.364],"בעינה":[32.806,35.364],"ביר אל מכסור":[32.777,35.221],"בנימינה":[32.523,34.945],"בענה":[32.93,35.271],"בית זית":[31.782,35.162],"בית יצחק":[32.328,34.891],"בית שמש":[31.731,34.993],"בית שאן":[32.497,35.496],"בית אלעזרי":[31.844,34.804],"בית דגן":[32.002,34.83],"בת דגן":[32.002,34.83],"בני ברק":[32.081,34.834],"בני עיש":[31.79,34.759],"בני עייש":[31.79,34.759],"באר יעקב":[31.939,34.837],"באר שבע":[31.252,34.791],"בת ים":[32.024,34.752],"בסמת טבעון":[32.739,35.157],"בַּרֶקֶת":[32.018,34.944],"ברקת":[32.018,34.944],"אזור":[32.024,34.806],"עתלית":[32.689,34.942],"אשקלון":[31.669,34.571],"אשדוד":[31.792,34.65],"עַרְעָרָה":[32.496,35.093],"ערערה":[32.496,35.093],"עֲרָד":[31.259,35.213],"ערד":[31.259,35.213],"עכו":[32.928,35.076],"אחיעזר":[31.981,34.872],"עפולה":[32.609,35.289],"אֲפִיקִים":[32.681,35.577],"אפיקים":[32.681,35.577],"אַבּוּ סְנָן":[32.959,35.172],"אבו סנן":[32.959,35.172],"אבו גוש":[31.806,35.109],"שבלי":[32.694,35.392],"שיבלי":[32.694,35.392],"הושעיה":[32.759,35.294],"רומת היב":[32.777,35.305],"סלאמה":[32.893,35.371],"סלמה":[32.893,35.371],"כפר ורדים":[32.994,35.278],"בית השמונאי":[31.89,34.917],"בית חשמונאי":[31.89,34.917],"חספין":[32.845,35.793],"קַצְרִין":[32.992,35.691],"קצרין":[32.992,35.691],"להבים":[31.373,34.816],"מדרשת בן גוריון":[30.852,34.783],"קיסריה":[32.519,34.905],"מערב ירושלים":[31.782,35.22],"מֵיתָר":[31.327,34.939],"מיתר":[31.327,34.939],"עראמשה":[33.087,35.227],"ערמשה":[33.087,35.227],"מֶרְכַּז שַׁפִּירָא":[31.699,34.709],"מרכז שפירא":[31.699,34.709],"אחוזת ברק":[32.643,35.338],"אחזת ברק":[32.643,35.338],"גִּבְעַת אַבְנִי":[32.775,35.438],"גבעת אבני":[32.775,35.438],"כוכב יאיר":[32.226,35.001],"בַּת חֵפֶר":[32.334,35.013],"בת חפר":[32.334,35.013],"חָרִישׁ":[32.462,35.046],"חריש":[32.462,35.046],"זמר":[32.365,35.038],"כַּרְמֵי יוֹסֵף":[31.848,34.92],"כרמי יוסף":[31.848,34.92],"עֵין נַקוּבָּא":[31.794,35.121],"עין נקובא":[31.794,35.121],"רהט":[31.395,34.757],"רהת":[31.395,34.757],"לָקִיָּה":[31.319,34.859],"לקיה":[31.319,34.859],"שֶׂגֶב שָׁלוֹם":[31.199,34.84],"שגב שלום":[31.199,34.84],"שקיב א סלם":[31.199,34.84],"מודיעין עילית":[31.932,35.044],"נוף איילון":[31.871,34.991],"חשמונאים":[31.93,35.022],"לפיד":[31.918,35.032],"כְּפָר הָאֳרָנִים":[31.92,35.037],"כפר האורנים":[31.92,35.037],"נִילִי":[31.964,35.049],"נילי":[31.964,35.049],"נַעֲלֶה":[31.962,35.066],"נעלה":[31.962,35.066],"טַלְמוֹן":[31.939,35.135],"טלמון":[31.939,35.135],"אריאל":[32.106,35.184],"רְבָבָה":[32.119,35.129],"רבבה":[32.119,35.129],"זרזיר":[32.728,35.214],"שִׁמְשִׁית":[32.733,35.247],"שימשית":[32.733,35.247],"שמשית":[32.733,35.247],"גִּבְעַת אֵלָה":[32.723,35.245],"גבעת אלה":[32.723,35.245],"נוֹפִית":[32.76,35.148],"נופית":[32.76,35.148],"פי נר":[32.76,35.148],"כעבייה":[32.75,35.184],"עֲדִי":[32.785,35.173],"עדי":[32.785,35.173],"תֵּל שֶׁבַע":[31.249,34.86],"תל א סבע":[31.249,34.86],"תל שבע":[31.249,34.86],"גַּן נֵר":[32.529,35.337],"גן נר":[32.529,35.337],"חרבת אבו תלול":[31.142,34.914],"עַרְעָרָה בַּנֶּגֶב":[31.16,35.023],"ערערה בנגב":[31.16,35.023],"חורה":[31.301,34.936],"כְּסֵיפָה":[31.245,35.093],"כסיפה":[31.245,35.093],"שהם":[31.999,34.946],"שוהם":[31.999,34.946],"אלעד":[32.051,34.957],"מתן":[32.159,34.975],"קדימה צורן":[32.278,34.919],"כסרא סומיע":[32.973,35.299],"מעלה עירון":[32.554,35.184],"צוּר יִצְחָק":[32.24,34.998],"צור יצחק":[32.24,34.998],"קִרְיַת אוֹנוֹ":[32.061,34.856],"קריית אונו":[32.061,34.856],"קרית אונו":[32.061,34.856],"אום בטין":[31.277,34.882],"אל סייד":[31.283,34.915],"בסמה":[32.529,35.101]};
           let _wCity = "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD", _wLat = 31.78, _wLon = 35.22;
           const _wText = transcribedText.replace(/(?:^|\s)\u05DC\u05D0\s+\u05D1[^\s,.:;]+/g, " ");
           for (const [_ct, _co] of Object.entries(_WCITIES)) {
@@ -563,7 +930,7 @@ var worker_default = {
         } catch (_) {
         }
       }
-      const _wavesQ = /(?:\u05D2\u05D5\u05D1\u05D4 (?:\u05E9\u05DC )?\u05D4?\u05D2\u05DC\u05D9\u05DD|\u05D4\u05D2\u05DC\u05D9\u05DD \u05D1\u05D9\u05DD|\u05DE\u05D4 \u05D4\u05D2\u05DC\u05D9\u05DD|\u05D0\u05D9\u05DA \u05D4\u05D9\u05DD|\u05D2\u05DC\u05D9\u05DD \u05E1\u05D5\u05E2\u05E8)/.test(transcribedText);
+      const _wavesQ = /(?:\u05D2\u05D5\u05D1\u05D4 (?:\u05E9\u05DC )?\u05D4?\u05D2\u05DC\u05D9\u05DD|\u05D4\u05D2\u05DC\u05D9\u05DD \u05D1\u05D9\u05DD|\u05DE\u05D4 \u05D4\u05D2\u05DC\u05D9\u05DD|\u05D0\u05D9\u05DA \u05D4\u05D9\u05DD|\u05D2\u05DC\u05D9\u05DD \u05E1\u05D5\u05E2\u05E8(?:\u05D9\u05DD)?|\u05D4\u05D9\u05DD \u05E1\u05D5\u05E2\u05E8|\u05D4\u05D0\u05DD \u05D4\u05D9\u05DD|\u05DE\u05D4 \u05DE\u05E6\u05D1 \u05D4\u05D9\u05DD)/.test(transcribedText);
       if (_wavesQ) {
         try {
           const _mres = await fetch("https://marine-api.open-meteo.com/v1/marine?latitude=32.08&longitude=34.78&current=wave_height&timezone=Asia%2FJerusalem", { headers: { "User-Agent": "Mozilla/5.0" } });
@@ -595,11 +962,11 @@ var worker_default = {
       }));
       if (emailIntent) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleEmail(env, GROQ_KEY, effectiveText, callerPhone, requestId, detectAccount(effectiveText));
+        return await handleEmail(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText));
       }
       if (chatIntent || sendIntent && mentionsSavedContact) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleGoogleChat(env, GROQ_KEY, effectiveText, callerPhone, requestId, detectAccount(effectiveText));
+        return await handleGoogleChat(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText));
       }
       if (!emailIntent && !chatIntent && effectiveText.split(/\s+/).filter(Boolean).length <= 3 && /(?:^|\s)(?:חשבון|בחשבון|החשבון|תיבה)?\s*(?:הראשון|ראשון|השני|שני|שתיים)(?![\u05D0-\u05EA])/.test(effectiveText)) {
         return speak("אין לי בקשה פתוחה עכשיו. אמור מה לבדוק, למשל בדוק מיילים או הודעות צ'אט");
@@ -743,6 +1110,11 @@ var worker_default = {
             else if (_hourEnd > 0) _after = transcribedText.slice(_hourEnd, _hourEnd + 22);
             const _mn = _after.match(/^[\s,]*ו(רבע|חצי|אחת|אחד|שתיים|שתים|שתי|שלוש|שלש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|חמישה עשר|עשרים וחמישה|עשרים|שלושים|ארבעים|חמישים)(?:\s*(?:דקות|דקה))?/);
             if (_mn) minute = _MINW[_mn[1]] ?? 0;
+          }
+          if (hour !== null && hour < 12) {
+            if (/\u05E2\u05E8\u05D1/.test(transcribedText)) hour += 12;
+            else if (/\u05DC\u05D9\u05DC\u05D4/.test(transcribedText)) hour += 12;
+            else if (/\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD/.test(transcribedText) && hour >= 1 && hour <= 5) hour += 12;
           }
           const isTomorrow = transcribedText.includes("מחר");
           const nowForRem = /* @__PURE__ */ new Date();
@@ -956,6 +1328,13 @@ function detectAccount(text) {
   if (/(?:חשבון|תיבה)\s*(?:ה)?(?:ראשון|ראשונה|אחד|אחת|1)/.test(t)) return 1;
   return null;
 }
+function stripAccountWords(text) {
+  const t = String(text || "").replace(/\s*(?:\u05D1)?(?:\u05D7\u05E9\u05D1\u05D5\u05DF|\u05EA\u05D9\u05D1\u05D4)\s*(?:\u05D4)?(?:\u05E8\u05D0\u05E9\u05D5\u05DF|\u05E8\u05D0\u05E9\u05D5\u05E0\u05D4|\u05D0\u05D7\u05D3|\u05D0\u05D7\u05EA|\u05E9\u05E0\u05D9\u05D9\u05DD|\u05E9\u05E0\u05D9\u05D4|\u05E9\u05E0\u05D9|\u05E9\u05EA\u05D9\u05D9\u05DD)(?![\u05D0-\u05EA])/g, " ");
+  return t.replace(/\s+/g, " ").trim() || String(text || "").trim();
+}
+__name(stripAccountWords, "stripAccountWords");
+__name2(stripAccountWords, "stripAccountWords");
+__name22(stripAccountWords, "stripAccountWords");
 async function askAccount(env, callerPhone, service, originalRequest, verb) {
   const pend = { service: String(service || "email"), originalRequest: String(originalRequest || ""), verb: String(verb || "בדיקה"), tries: 0 };
   const key = "acct_" + normalizeIsraelPhone(callerPhone);
@@ -1704,7 +2083,34 @@ __name(fmtEmailList, "fmtEmailList");
 __name2(fmtEmailList, "fmtEmailList");
 __name22(fmtEmailList, "fmtEmailList");
 function normalizeAddress(addr) {
-  let a = String(addr || "").trim().replace(/שטרודל/g, "@").replace(/נקודה/g, ".").replace(/\s+/g, "");
+  let a = String(addr || "").trim()
+    .replace(/\u05D5\u05D5[\u05D9\u05D9]\s*\u05D8\u05D9|\u05D5\u05D5[\u05D9\u05D9]\s*\u05D8\u05D5|\u05D5\u05D0\u05D9\s*\u05D8\u05D9/g, "yt")
+    .replace(/\u05D5\u05D5[\u05D9\u05D9]|\u05D5\u05D0\u05D9/g, "y")
+    .replace(/\u05D3\u05D1\u05DC\s*\u05D5\u05D5|\u05D3\u05D0\u05D1\u05DC\u05D9\u05D5/g, "w")
+    .replace(/\u05D2\u05D9\u05DE\u05D9\u05D9\u05DC|\u05D2\u05D8\u05DE\u05D9\u05D9\u05DC|\u05D2\u05DE\u05D9\u05D9\u05DC|\u05D2\u05D9\u05DE\u05DC|\u05D2\u05D9\u05DE\u05D9\u05D9\u05DC|\u05D2\u05D5\u05D2\u05DC\s*\u05DE\u05D9\u05D9\u05DC/g, "gmail")
+    .replace(/\u05D7\u05D9\u05D9\u05D9\u05D1|\u05D7\u05D9\u05D9\u05D1\u05D5|\u05D4\u05D5\u05D8\u05DE\u05D9\u05D9\u05DC|\u05D4\u05D5\u05D8\u05DE\u05D9\u05DC/g, "hotmail")
+    .replace(/\u05D9\u05E0\u05D8\u05E8\u05E0\u05D8|\u05D0\u05D9\u05E0\u05D8\u05E8\u05E0\u05D8/g, "net")
+    .replace(/\u05E7\u05D5\u05DD|\u05E7\u05D0\u05DD|\u05E7\u05D5\u05DD \u05E7\u05D5\u05D5\u05D3/g, "com")
+    .replace(/\u05D0\u05D5\u05E8\u05D2|\u05D0\u05D5\u05E8\u05D2 \u05D0\u05E0\u05D2\u05DC\u05D9|\u05D0\u05D5\u05E8\u05D2/g, "org")
+    .replace(/\u05E9\u05D8\u05E8\u05D5\u05D3\u05DC/g, "@").replace(/\u05E0\u05E7\u05D5\u05D3\u05D4/g, ".")
+    .replace(/\u05D0\u05E4\u05E1/g, "0")
+    .replace(/\u05D0\u05D7\u05EA|\u05D0\u05D7\u05D3/g, "1")
+    .replace(/\u05E9\u05EA\u05D9\u05D9\u05DD|\u05E9\u05EA\u05D9\u05DD|\u05E9\u05EA\u05D9\u05D9|\u05E9\u05EA\u05D9\u05DD/g, "2")
+    .replace(/\u05E9\u05DC\u05D5\u05E9|\u05E9\u05DC\u05E9/g, "3")
+    .replace(/\u05D0\u05E8\u05D1\u05E2/g, "4")
+    .replace(/\u05D7\u05DE\u05D9\u05E9\u05D9\u05DD|\u05D7\u05DE\u05D9\u05E9\u05D4/g, "55").replace(/\u05D7\u05DE\u05E9/g, "5")
+    .replace(/\u05E9\u05D9\u05E9\u05D4/g, "6").replace(/\u05E9\u05E9/g, "6")
+    .replace(/\u05E9\u05D1\u05E2/g, "7")
+    .replace(/\u05E9\u05DE\u05D5\u05E0\u05D4/g, "8")
+    .replace(/\u05EA\u05E9\u05E2|\u05D8\u05D9\u05E1\u05E2/g, "9")
+    .replace(/\u05E2\u05E9\u05E8\u05D9\u05D5\u05EA/g, "20").replace(/\u05E2\u05E9\u05E8\u05D4|\u05E2\u05E9\u05E8/g, "10")
+    .replace(/\u05E9\u05DC\u05D5\u05E9\u05D9\u05DD/g, "30")
+    .replace(/\u05D0\u05E8\u05D1\u05E2\u05D9\u05DD/g, "40")
+    .replace(/\u05E9\u05D9\u05E9\u05D9\u05DD/g, "60")
+    .replace(/\u05E9\u05D1\u05E2\u05D9\u05DD/g, "70")
+    .replace(/\u05E9\u05DE\u05D5\u05E0\u05D9\u05DD/g, "80")
+    .replace(/\u05EA\u05E9\u05E2\u05D9\u05DD/g, "90")
+    .replace(/\s+/g, "");
   if (a && !a.includes("@") && /^[a-zA-Z0-9._%+-]+$/.test(a)) a = a + "@gmail.com";
   return a.replace(/[^a-zA-Z0-9._@%+-]/g, "");
 }
@@ -1736,8 +2142,8 @@ async function routeCommunication(env, GROQ_KEY, transcribedText, callerPhone, r
   }
   logEvent("communication_routed", { service: String(service).slice(0, 12), caller: callerTail(callerPhone) });
   const _acct = detectAccount(transcribedText);
-  if (service === "email") return await handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestId, _acct);
-  if (service === "chat") return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId, _acct);
+  if (service === "email") return await handleEmail(env, GROQ_KEY, stripAccountWords(transcribedText), callerPhone, requestId, _acct);
+  if (service === "chat") return await handleGoogleChat(env, GROQ_KEY, stripAccountWords(transcribedText), callerPhone, requestId, _acct);
   await saveConvoTurn(env, transcribedText, "\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8");
   return speak("\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA\u05D9 \u05D0\u05DD \u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D4\u05D5\u05D3\u05E2\u05EA \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8. \u05D0\u05DE\u05D5\u05E8 \u05DE\u05D9\u05D9\u05DC \u05D0\u05D5 \u05D2\u05D5\u05D2\u05DC \u05E6\u05D0\u05D8 \u05D1\u05EA\u05D7\u05D9\u05DC\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4");
 }
@@ -1853,7 +2259,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("אין הרשאה לגישה למייל ממספר זה");
     }
-    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
+    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, יש לי מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
