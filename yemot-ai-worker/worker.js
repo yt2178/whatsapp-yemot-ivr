@@ -549,6 +549,11 @@ var worker_default = {
       return new Response("ok", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
     }
     const callerPhone = params.ApiPhone || params.phone || params.Phone || "";
+    if (url.pathname.startsWith("/tlk/")) {
+      if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
+      return await handleTlkRequest(env, params, callerPhone);
+    }
+
     const mailboxAuth = url.pathname.startsWith("/ivr/") ? url.pathname.slice(5) : "";
     if (url.pathname.startsWith("/dbg/") && (request.method === "GET" || request.method === "POST")) {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
@@ -2592,6 +2597,220 @@ var ContState = class {
 __name(ContState, "ContState");
 __name2(ContState, "ContState");
 __name22(ContState, "ContState");
+
+// ===================== שלוחת תמלול קולי (TLK) =====================
+async function tlkStore(env, key, val) {
+  try { if (val === null) await env.USER_MEMORY.delete(key); else await env.USER_MEMORY.put(key, JSON.stringify(val)); } catch (e) {}
+}
+__name(tlkStore, "tlkStore");
+__name2(tlkStore, "tlkStore");
+__name22(tlkStore, "tlkStore");
+async function tlkLoad(env, key) {
+  try { const v = await env.USER_MEMORY.get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+__name(tlkLoad, "tlkLoad");
+__name2(tlkLoad, "tlkLoad");
+__name22(tlkLoad, "tlkLoad");
+function tlkDateStr(ms) {
+  try { return new Intl.DateTimeFormat("he-IL", { timeZone: "Asia/Jerusalem", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ms)); } catch (_) { return ""; }
+}
+__name(tlkDateStr, "tlkDateStr");
+__name2(tlkDateStr, "tlkDateStr");
+__name22(tlkDateStr, "tlkDateStr");
+const TLK_STYLE_AI = {
+  general: "אתה עורך לשוני. קבל תמלול גולמי ממודל זיהוי דיבור והחזר אותו מנוקה בפיסוק: פסיקים, נקודות, סימני שאלה וחלוקה לפסקאות הגיוניות. אסור לשנות, להוסיף או להשמיט אף מילה מהתוכן המקורי. אסור לתרגן. החזר רק את הטקסט המפוסק בלי הקדמות.",
+  torah: "אתה עורך לשוני תורני. קבל תמלול גולמי של שיעור או דברי תורה והחזר אותו מנוקה בפיסוק: פסיקים, נקודות, סימני שאלה, וחלוקה לפסקאות לפי מהלך הדברים, עם הבחנה בין קושיא תירוץ וראיה. פתח ראשי תיבות גורים כמו רמב״ם, רש״י, שו״ע, משנ״ב, גמ׳, ברייתא. אסור לשנות, להוסיף או להשמיט אף מילה מהתוכן המקורי. אסור לתרגן. החזר רק את הטקסט המפוסק בלי הקדמות."
+};
+__name(TLK_STYLE_AI, "TLK_STYLE_AI");
+const TLK_WHISPER_PROMPT = {
+  general: "תמלול עברית מדוברת, משפטים ברורים, שמות פרטיים בעברית, פיסוק מלא.",
+  torah: "תמלול שיעור תורני בעברית: רמב״ם, רש״י, תוספות, סוגיא, קושיא, תירוץ, נפקא מינה, מיגו, סברא, אליבא דהלכתא, ריטב״א, מהרש״א, שו״ע, משנ״ב, גמרא, ברייתא, מאי קמ״ל, הכי קאמר. פיסוק מלא."
+};
+__name(TLK_WHISPER_PROMPT, "TLK_WHISPER_PROMPT");
+async function tlkSay(env, text, readParams) {
+  let body = "";
+  const f = await ttsTextToYemotFile(env, text);
+  body = f ? "id_list_message=f-" + f : "id_list_message=t-" + text;
+  if (readParams) body += "&read=" + readParams;
+  return new Response(body, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+__name(tlkSay, "tlkSay");
+__name2(tlkSay, "tlkSay");
+__name22(tlkSay, "tlkSay");
+async function tlkRead(env, promptText, readParams) {
+  const f = await ttsTextToYemotFile(env, promptText);
+  return new Response("read=" + (f ? "f-" + f : "t-" + promptText) + "=" + readParams, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+__name(tlkRead, "tlkRead");
+__name2(tlkRead, "tlkRead");
+__name22(tlkRead, "tlkRead");
+async function tlkProcessRecording(env, rawPath, callerPhone) {
+  let p = String(rawPath).trim();
+  while (p.startsWith("ivr2:") || p.startsWith("/")) { if (p.startsWith("ivr2:")) p = p.substring(5); if (p.startsWith("/")) p = p.substring(1); }
+  const dl = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + p, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!dl.ok) { logEvent("tlk_dl_failed", { status: dl.status }); return { error: "download" }; }
+  const audioBlob = await dl.blob();
+  if (!audioBlob || audioBlob.size < 1000) return { error: "empty" };
+  if (audioBlob.size > 24 * 1024 * 1024) return { error: "big", sizeMB: Math.round(audioBlob.size / 1048576) };
+  const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
+  const style = cfg.style === "torah" ? "torah" : "general";
+  const fd = new FormData();
+  fd.append("file", audioBlob, "recording.wav");
+  fd.append("model", "whisper-large-v3");
+  fd.append("language", "he");
+  fd.append("temperature", "0");
+  fd.append("prompt", TLK_WHISPER_PROMPT[style]);
+  const t0 = Date.now();
+  const wr = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.GROQ_KEY }, body: fd });
+  if (!wr.ok) { logEvent("tlk_whisper_failed", { status: wr.status }); return { error: "whisper" }; }
+  let raw = String((await wr.json()).text || "").trim();
+  if (!raw) return { error: "silent" };
+  logEvent("tlk_whisper_ok", { ms: Date.now() - t0, chars: raw.length });
+  let final = raw;
+  if (raw.length > 12) {
+    const words = raw.split(/\s+/).length;
+    const edited = await groqChatShort(env.GROQ_KEY, TLK_STYLE_AI[style], raw, Math.min(3000, Math.max(400, words * 3)));
+    if (edited) {
+      const eWords = edited.split(/\s+/).length;
+      if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
+    }
+  }
+  return { raw, final, style, seconds: Math.round((Date.now() - t0) / 1000) };
+}
+__name(tlkProcessRecording, "tlkProcessRecording");
+__name2(tlkProcessRecording, "tlkProcessRecording");
+__name22(tlkProcessRecording, "tlkProcessRecording");
+async function tlkSendMail(env, callerPhone, item, mail) {
+  try {
+    const body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ותומלל בקו הטלפוני ב" + tlkDateStr(item.at) + ". סגנון: " + (item.style === "torah" ? "תורני" : "רגיל") + ".";
+    const r = await callBridge(env, { action: "send", to: mail, subject: "תמלול חדש מהקו - " + tlkDateStr(item.at), body }, 1);
+    logEvent("tlk_mail", { ok: Boolean(r && r.ok) });
+    return Boolean(r && r.ok);
+  } catch (e) { return false; }
+}
+__name(tlkSendMail, "tlkSendMail");
+__name2(tlkSendMail, "tlkSendMail");
+__name22(tlkSendMail, "tlkSendMail");
+async function tlkMainMenu(env) {
+  return tlkRead(env, "לתמלול הקלטה חדשה הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לסטטוס החשבון הקש שלוש. להגדרות הקש ארבע.", "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+}
+__name(tlkMainMenu, "tlkMainMenu");
+__name2(tlkMainMenu, "tlkMainMenu");
+__name22(tlkMainMenu, "tlkMainMenu");
+async function handleTlkRequest(env, params, callerPhone) {
+  logEvent("tlk_request", { caller: String(callerPhone).slice(-4), hasLink: Boolean(params.link), menu: String(params.menu || ""), pick: String(params.pick || ""), set: String(params.set || ""), after: String(params.after || "") });
+  if (!callerPhone) return tlkSay(env, "שגיאה בזיהוי המאזין, נסה שוב");
+  const key = "tlk_" + callerPhone;
+  const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
+  const isOwner = !env.MAILBOX_OWNER_PHONE || String(callerPhone).replace(/\D/g, "").endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
+  const c = { sendEmail: cfg.sendEmail === undefined ? isOwner : cfg.sendEmail !== false, playResult: cfg.playResult !== false, style: cfg.style === "torah" ? "torah" : "general" };
+  const mail = (await tlkLoad(env, "tlk_mail_" + callerPhone)) || (isOwner ? "y0508352872@gmail.com" : "");
+
+  // ----- הקלטה חדשה או המשך -----
+  const recPath = params.link || params.file_path || params.RecordingPath || "";
+  if (recPath && String(recPath).includes(".wav")) {
+    const pend = await tlkLoad(env, "tlk_pend_" + callerPhone);
+    const res = await tlkProcessRecording(env, recPath, callerPhone);
+    if (res.error === "download") return tlkSay(env, "לא הצלחתי להוריד את ההקלטה, נסה שוב");
+    if (res.error === "empty" || res.error === "silent") return tlkSay(env, "לא נשמע דיבור בהקלטה, נסה להקליט שוב");
+    if (res.error === "big") return tlkSay(env, "ההקלטה שוקלת מעל עשרים וארבע מגה בייט ואינה ניתנת לתמלול, נסה להקליט בחלקים");
+    if (res.error === "whisper") return tlkSay(env, "שירות התמלול עמוס כרגע, נסה שוב בעוד דקה");
+    let list = (await tlkLoad(env, key)) || [];
+    let item;
+    let appended = false;
+    if (pend && pend.appendTo) {
+      item = list.find((x) => x.id === pend.appendTo);
+      if (item) { item.text = item.text + "\n\n" + res.final; item.raw = item.raw + "\n\n" + res.raw; item.updated = Date.now(); item.appendCount = (item.appendCount || 0) + 1; appended = true; }
+    }
+    if (!appended) {
+      item = { id: "t" + Date.now(), at: Date.now(), updated: Date.now(), text: res.final, raw: res.raw, style: res.style };
+      list.unshift(item);
+      if (list.length > 50) list = list.slice(0, 50);
+    }
+    await tlkStore(env, key, list);
+    await tlkStore(env, "tlk_pend_" + callerPhone, null);
+    let mailSent = false;
+    if (c.sendEmail && mail) mailSent = await tlkSendMail(env, callerPhone, item, mail);
+    const mailNote = mailSent ? " ונשלח למייל" : "";
+    let say;
+    if (appended) say = "ההמשך נוסף בהצלחה לתמלול מ" + tlkDateStr(item.at) + mailNote + ". ";
+    else say = "התמלול הושלם" + mailNote + ". ";
+    if (c.playResult && res.final.length <= 1500) say = say + "כך הוא נשמע: " + res.final;
+    else if (c.playResult) say = say + "תחילת התמלול: " + res.final.slice(0, 350) + ". התמלול המלא ארוך ונשמר" + mailNote + ". ";
+    else say = say + "אורכו כ" + res.final.split(/\s+/).length + " מילים. ";
+    say = say + " להקלטה נוספת הקש אחת, לתפריט הקש שתיים.";
+    return tlkRead(env, say, "again,no,1,1,15,Digits,yes,yes,,,,,None,");
+  }
+  if (params.again === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט המתן לשקט.", "link,,record,/7/rec,,no,yes,,1,600");
+  if (params.again && params.again !== "1") return tlkMainMenu(env);
+
+  // ----- בחירת תמלול לשמיעה / המשך / מייל חוזר -----
+  const pick = String(params.pick || "");
+  if (pick) {
+    const list = (await tlkLoad(env, key)) || [];
+    const idx = Number(pick) - 1;
+    if (isNaN(idx) || idx < 0 || idx >= list.length || idx >= 5) return tlkSay(env, "בחירה שגויה");
+    const item = list[idx];
+    const after = String(params.after || "");
+    if (after === "1") {
+      await tlkStore(env, "tlk_pend_" + callerPhone, { appendTo: item.id });
+      return tlkRead(env, "הקלט את ההמשך עבור התמלול מ" + tlkDateStr(item.at) + ". בסיום הקש סולמית.", "link,,record,/7/rec,,no,yes,,1,600");
+    }
+    if (after === "3") {
+      const ok = await tlkSendMail(env, callerPhone, item, mail);
+      return tlkSay(env, ok ? "התמלול נשלח שוב למייל" : "שליחת המייל נכשלה, נסה שוב מאוחר יותר");
+    }
+    if (after === "2") return tlkMainMenu(env);
+    const body = item.text.length > 2000 ? item.text.slice(0, 2000) + ". ההמשך במייל." : item.text;
+    return tlkRead(env, "תמלול מ" + tlkDateStr(item.at) + ": " + body, "after,no,1,1,15,Digits,yes,yes,,,,,None,");
+  }
+  const after = String(params.after || "");
+  if (after) return tlkMainMenu(env);
+
+  // ----- תפריט ראשי -----
+  const menu = String(params.menu || "");
+  if (menu === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או פשוט המתן לשקט. ניתן להקליט עד עשר דקות.", "link,,record,/7/rec,,no,yes,,1,600");
+  if (menu === "2") {
+    const list = (await tlkLoad(env, key)) || [];
+    if (!list.length) return tlkRead(env, "אין תמלולים שמורים. להקלטה חדשה הקש אחת.", "menu,no,1,1,15,Digits,yes,yes,,,,,None,");
+    const top = list.slice(0, 5);
+    let say = "יש לך " + list.length + " תמלולים. ";
+    for (let i = 0; i < top.length; i++) {
+      const head = top[i].text.replace(/\s+/g, " ").slice(0, 60);
+      say += "תמלול " + (i + 1) + ", מ" + tlkDateStr(top[i].at) + ": " + head + ". ";
+    }
+    say += "לשמיעת תמלול הקש את מספרו.";
+    return tlkRead(env, say, "pick,no,1,1,20,Digits,yes,yes,,,,,None,");
+  }
+  if (menu === "3") {
+    const list = (await tlkLoad(env, key)) || [];
+    let say = "יש לך " + list.length + " תמלולים שמורים.";
+    if (list.length) say += " האחרון מ" + tlkDateStr(list[0].at) + ".";
+    say += " שליחה למייל " + (c.sendEmail && mail ? "פעילה לכתובת " + mail : "כבויה") + ". הקראת התמלול לאחר ההקלטה " + (c.playResult ? "פעילה" : "כבויה") + ". סגנון התמלול " + (c.style === "torah" ? "תורני" : "רגיל") + ".";
+    return tlkRead(env, say, "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+  }
+  if (menu === "4") {
+    const setv = String(params.set || "");
+    if (setv === "1") { c.sendEmail = !c.sendEmail; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "שליחה למייל " + (c.sendEmail ? "הופעלה" : "כובתה") + ". " + "להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
+    if (setv === "2") { c.playResult = !c.playResult; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "הקראת התמלול " + (c.playResult ? "הופעלה" : "כובתה") + ". להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
+    if (setv === "3") { c.style = c.style === "torah" ? "general" : "torah"; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "סגנון התמלול הוגדר ל" + (c.style === "torah" ? "תורני" : "רגיל") + ". להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,"); }
+    if (setv === "4") return tlkMainMenu(env);
+    return tlkRead(env, "להפעלה או כיבוי שליחה למייל הקש אחת. להפעלה או כיבוי הקראת התמלול הקש שתיים. לשינוי סגנון בין רגיל לתורני הקש שלוש. לחזרה לתפריט הקש ארבע.", "set,no,1,1,20,Digits,yes,yes,,,,,None,");
+  }
+  // כניסה ראשונה לשלוחה
+  const wf = await ttsTextToYemotFile(env, "ברוכים הבאים לשלוחת התמלול. הקלט את דבריך ותקבל תמלול מפוסק בהקראה ובמייל.");
+  const mf = await ttsTextToYemotFile(env, "לתמלול הקלטה חדשה הקש אחת. לשמיעת התמלולים האחרונים הקש שתיים. לסטטוס החשבון הקש שלוש. להגדרות הקש ארבע.");
+  if (mf) {
+    let b = "read=f-" + mf + "=menu,no,1,1,20,Digits,yes,yes,,,,,None,";
+    if (wf) b = "id_list_message=f-" + wf + "&" + b;
+    return new Response(b, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
+  return tlkMainMenu(env);
+}
+__name(handleTlkRequest, "handleTlkRequest");
+__name2(handleTlkRequest, "handleTlkRequest");
+__name22(handleTlkRequest, "handleTlkRequest");
+
 export {
   worker_default as default,
   ContState
