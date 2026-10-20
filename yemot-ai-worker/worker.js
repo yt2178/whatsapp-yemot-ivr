@@ -646,12 +646,26 @@ var worker_default = {
       return Response.json({ key: k, do: doVal?.value ?? null, kv: kvVal ? JSON.parse(kvVal) : null });
     }
     if (params.confirm !== void 0 && callerPhone) {
-      if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-      return await handleConfirm(env, params.confirm, callerPhone);
+      const hasRecording = Boolean(params.link || params.file_path || params.RecordingPath || params.val || params["000"] || params["api_000"] || (typeof params.t === "string" && params.t.trim())) || Object.entries(params).some(([, v]) => typeof v === "string" && (v.includes(".wav") || v.includes(".opus")));
+      if (!hasRecording) {
+        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D1\u05D9\u05E6\u05D5\u05E2 \u05D4\u05E4\u05E2\u05D5\u05DC\u05D4 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
+        return await handleConfirm(env, params.confirm, callerPhone);
+      }
+      logEvent("stale_confirm_with_recording", { caller: callerTail(callerPhone) });
     }
+    let preferredAccount = null;
     if (params.account !== void 0 && callerPhone) {
-      if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לביצוע הפעולה ממספר זה");
-      return await handleAccountSelection(env, String(params.account), callerPhone, makeRequestId(callerPhone, "dtmf"));
+      const hasRecording = Boolean(params.link || params.file_path || params.RecordingPath || params.val || params["000"] || params["api_000"] || (typeof params.t === "string" && params.t.trim())) || Object.entries(params).some(([, v]) => typeof v === "string" && (v.includes(".wav") || v.includes(".opus")));
+      if (hasRecording) {
+        const d = String(params.account);
+        if (d === "1" || d === "2") {
+          preferredAccount = d === "1" ? 1 : 2;
+          logEvent("stale_account_with_recording", { caller: callerTail(callerPhone), account: d });
+        }
+      } else {
+        if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("אין הרשאה לביצוע הפעולה ממספר זה");
+        return await handleAccountSelection(env, String(params.account), callerPhone, makeRequestId(callerPhone, "dtmf"));
+      }
     }
     logEvent("request_received", { hasRecording: Boolean(params.link || params.file_path || params.RecordingPath || params.val || params["000"] || params["api_000"]), caller: callerTail(callerPhone) });
     if (callerPhone && env.USER_MEMORY) {
@@ -903,13 +917,40 @@ var worker_default = {
               const _cm = _wText.match(/(?:^|\s)(?:\u05D1|\u05E9\u05D1|\u05DC\u05D1)([\u05D0-\u05EA"']+(?:\s[\u05D0-\u05EA"']+)?)/g);
               if (_cm) {
                 const cands = _cm.map((m) => m.replace(/^[^\u05D0-\u05EA]*/, "").replace(/^(?:\u05E9\u05D1|\u05DC\u05D1|\u05D1)/, "").replace(/^\u05E2\u05D9\u05E8\s*/, "").replace(/\s(?:\u05DE\u05D7\u05E8|\u05D4\u05D9\u05D5\u05DD|\u05E2\u05DB\u05E9\u05D9\u05D5|\u05D1\u05D1\u05D5\u05E7\u05E8|\u05D1\u05E2\u05E8\u05D1|\u05D1\u05DC\u05D9\u05DC\u05D4)$/, "")).reverse().slice(0, 3);
+                const _stop = new Set(["\u05D1\u05D5\u05E7\u05E8", "\u05E2\u05E8\u05D1", "\u05DC\u05D9\u05DC\u05D4", "\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD", "\u05DE\u05D7\u05E8", "\u05D4\u05D9\u05D5\u05DD", "\u05E2\u05DB\u05E9\u05D9\u05D5", "\u05D9\u05E9\u05E8\u05D0\u05DC", "\u05E2\u05D5\u05DC\u05DD", "\u05D7\u05D5\u05E5"]);
+                const _nrm = (x) => x.replace(/[\u0591-\u05C7]/g, "").replace(/\s+/g, "");
+                const _lev = (a, b) => {
+                  if (Math.abs(a.length - b.length) > 2) return 9;
+                  const m = a.length, n = b.length;
+                  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+                  for (let j = 1; j <= n; j++) d[0][j] = j;
+                  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+                  return d[m][n];
+                };
+                let _hadCands = false;
                 for (const _cd of cands) {
-                  if (_cd.length < 2) continue;
+                  if (_cd.length < 2 || _stop.has(_cd)) continue;
+                  _hadCands = true;
+                  const _variants = [_nrm(_cd), _nrm("\u05D1" + _cd)];
+                  let _fz = null;
+                  for (const [_ct, _co] of Object.entries(_WCITIES)) {
+                    const _nt = _nrm(_ct);
+                    for (const _nc of _variants) {
+                      if (_nt === _nc) { _fz = [_ct, _co]; break; }
+                      if (_nc.length >= 4 && _nt.length >= 4 && _lev(_nc, _nt) <= (_nc.length >= 7 ? 2 : 1)) { _fz = [_ct, _co]; break; }
+                    }
+                    if (_fz) break;
+                  }
+                  if (_fz) { _wCity = _fz[0]; _wLat = _fz[1][0]; _wLon = _fz[1][1]; logEvent("city_fuzzy_match", { heard: _cd, city: _fz[0] }); break; }
                   const _gcres = await fetch("https://geocoding-api.open-meteo.com/v1/search?name=" + encodeURIComponent(_cd) + "&count=5&language=he&format=json", { headers: { "User-Agent": "Mozilla/5.0" } });
                   if (!_gcres.ok) continue;
                   const _gd = await _gcres.json();
                   const _hit = (_gd.results || []).find((r) => String(r.country_code || "").toUpperCase() === "IL");
                   if (_hit) { _wCity = _cd; _wLat = _hit.latitude; _wLon = _hit.longitude; break; }
+                }
+                if (_hadCands && _wCity === "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD") {
+                  await saveConvoTurn(env, transcribedText, "\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D6\u05D4\u05D5\u05EA \u05D0\u05EA \u05D4\u05E2\u05D9\u05E8 \u05E9\u05D0\u05DE\u05E8\u05EA. \u05D0\u05DE\u05D5\u05E8 \u05E9\u05D5\u05D1 \u05D0\u05EA \u05E9\u05DD \u05D4\u05E2\u05D9\u05E8");
+                  return speak("\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D6\u05D4\u05D5\u05EA \u05D0\u05EA \u05D4\u05E2\u05D9\u05E8 \u05E9\u05D0\u05DE\u05E8\u05EA. \u05D0\u05DE\u05D5\u05E8 \u05E9\u05D5\u05D1 \u05D0\u05EA \u05E9\u05DD \u05D4\u05E2\u05D9\u05E8");
                 }
               }
             } catch (_) {
@@ -963,11 +1004,11 @@ var worker_default = {
       }));
       if (emailIntent) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleEmail(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText));
+        return await handleEmail(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText) || preferredAccount);
       }
       if (chatIntent || sendIntent && mentionsSavedContact) {
         if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET) return speak("\u05D0\u05D9\u05DF \u05D4\u05E8\u05E9\u05D0\u05D4 \u05DC\u05D2\u05D9\u05E9\u05D4 \u05DC\u05DE\u05D9\u05D9\u05DC \u05D5\u05DC\u05E6\u05D0\u05D8 \u05DE\u05DE\u05E1\u05E4\u05E8 \u05D6\u05D4");
-        return await handleGoogleChat(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText));
+        return await handleGoogleChat(env, GROQ_KEY, stripAccountWords(effectiveText), callerPhone, requestId, detectAccount(effectiveText) || preferredAccount);
       }
       if (!emailIntent && !chatIntent && effectiveText.split(/\s+/).filter(Boolean).length <= 3 && /(?:^|\s)(?:חשבון|בחשבון|החשבון|תיבה)?\s*(?:הראשון|ראשון|השני|שני|שתיים)(?![\u05D0-\u05EA])/.test(effectiveText)) {
         return speak("אין לי בקשה פתוחה עכשיו. אמור מה לבדוק, למשל בדוק מיילים או הודעות צ'אט");
@@ -1045,7 +1086,7 @@ var worker_default = {
               return `${parts.weekday || ""} בשעה ${timeWords}: ${r.message || "תזכורת"}`;
             } catch (_) { return null; }
           };
-          if (/(?:מח[קי]|מחיק|מחוק|תמחק|תבטל|בטל)/.test(transcribedText)) {
+          if (/(?:ת?מח[קהי]|מחיק|מחוק|מח[קה] (?:את )?ה?[זס]כור|תבטל|בטל)/.test(transcribedText)) {
             const delKey = `reminder_${callerPhone}`;
             const had = await env.USER_MEMORY.get(delKey);
             if (had) {
@@ -1055,7 +1096,7 @@ var worker_default = {
             }
             return speak("אין תזכורות שמורות, אין מה למחוק");
           }
-          if (/(?:מה (?:הוא |היא )?יגיד|מה יש ב|מה התוכן|מתי (?:תזכיר|אתה מזכיר)|האם יש (?:עוד )?תזכורות|יש עוד תזכורות|אילו תזכורות|כמה תזכורות|מה התזכורות|מה סידרת)/.test(transcribedText) && !/^\s*(?:ת[י]?[זס]כ[יר]|תעשה)/.test(transcribedText)) {
+          if (/(?:מה (?:הוא |היא )?יגיד|מה יש ב|מה התוכן|מתי (?:תזכיר|אתה מזכיר)|האם יש (?:לי )?(?:עוד )?ת[זס]כורות|יש (?:לי )?(?:עוד )?ת[זס]כורות|אילו ת[זס]כורות|איזה ת[זס]כורות|כמה ת[זס]כורות|מה הת[זס]כורת שלי|מה הת[זס]כורות|מה סידרת)/.test(transcribedText) && !/^\s*(?:ת[י]?[זס]כ[יר]|תעשה)/.test(transcribedText)) {
             const cur = await _fmtRem(callerPhone);
             return speak(cur ? `יש לך תזכורת אחת, ${cur}. כדי למחוק תגיד מחק תזכורת` : "אין תזכורות שמורות כרגע");
           }
@@ -1128,7 +1169,8 @@ var worker_default = {
           const _ilP = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Jerusalem", hour12: false, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(nowForRem).reduce((acc, x) => (acc[x.type] = x.value, acc), {});
           let fireDate = new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day + (isTomorrow ? 1 : 0), hour, minute, 0) - _israelOffsetMs(new Date(Date.UTC(+_ilP.year, +_ilP.month - 1, +_ilP.day, hour, minute, 0))));
           fireDate = new Date(fireDate.getTime() - _israelOffsetMs(fireDate) + _israelOffsetMs(new Date(fireDate.getTime() - _israelOffsetMs(fireDate))));
-          if (!isTomorrow && fireDate.getTime() <= nowForRem.getTime() + 6e4) fireDate = new Date(fireDate.getTime() + 864e5);
+          let _rolledFwd = false;
+          if (!isTomorrow && fireDate.getTime() <= nowForRem.getTime() + 6e4) { fireDate = new Date(fireDate.getTime() + 864e5); _rolledFwd = true; }
           let _msg = transcribedText;
           if (_hm) _msg = _msg.replace(_hm[0], " ");
           if (minute && !/_hm.*/.test("")) {
@@ -1140,7 +1182,7 @@ var worker_default = {
           const _hW2 = hebNumWords(hour === 0 ? 12 : hour > 12 ? hour - 12 : hour);
           const _tod2 = hour >= 21 || hour < 5 ? " בלילה" : hour >= 19 ? " בערב" : hour >= 12 && hour < 17 ? " בצהריים" : " בבוקר";
           const _minP2 = minute === 15 ? " ורבע" : minute === 30 ? " וחצי" : minute > 0 ? " ו" + hebNumWords(minute) + " דקות" : "";
-          return speak(`נשמרה תזכורת ל${isTomorrow ? "מחר" : "היום"} בשעה ${_hW2}${_tod2}${_minP2}: ${message}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
+          return speak(`נשמרה תזכורת ל${(isTomorrow || _rolledFwd) ? "מחר" : "היום"} בשעה ${_hW2}${_tod2}${_minP2}: ${message}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
         }
         const nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
         if (nameMatch && callerPhone && env.USER_MEMORY) {
@@ -1625,9 +1667,10 @@ function updatedStampText(unix) {
     const day = parseInt(get("day"), 10), mon = parseInt(get("month"), 10);
     const hh = parseInt(get("hour"), 10), mm = parseInt(get("minute"), 10);
     const months = ["\u05D9\u05E0\u05D5\u05D0\u05E8", "\u05E4\u05D1\u05E8\u05D5\u05D0\u05E8", "\u05DE\u05E8\u05E5", "\u05D0\u05E4\u05E8\u05D9\u05DC", "\u05DE\u05D0\u05D9", "\u05D9\u05D5\u05E0\u05D9", "\u05D9\u05D5\u05DC\u05D9", "\u05D0\u05D5\u05D2\u05D5\u05E1\u05D8", "\u05E1\u05E4\u05D8\u05DE\u05D1\u05E8", "\u05D0\u05D5\u05E7\u05D8\u05D5\u05D1\u05E8", "\u05E0\u05D5\u05D1\u05DE\u05D1\u05E8", "\u05D3\u05E6\u05DE\u05D1\u05E8"];
-    let time = speakTimeNumber(hh);
+    let time = speakTimeNumber(hh % 24);
     if (mm > 0) time += " \u05D5" + speakTimeNumber(mm);
-    return "\u05E2\u05D5\u05D3\u05DB\u05DF \u05D1\u05EA\u05D0\u05E8\u05D9\u05DA " + day + " \u05D1" + months[mon - 1] + " " + new Date().getFullYear() + " \u05D1\u05E9\u05E2\u05D4 " + time;
+    const _tod = hh >= 21 || hh < 5 ? " \u05D1\u05DC\u05D9\u05DC\u05D4" : hh >= 17 ? " \u05D1\u05E2\u05E8\u05D1" : hh >= 12 ? " \u05D1\u05E6\u05D4\u05E8\u05D9\u05D9\u05DD" : " \u05D1\u05D1\u05D5\u05E7\u05E8";
+    return "\u05E2\u05D5\u05D3\u05DB\u05DF \u05D1\u05EA\u05D0\u05E8\u05D9\u05DA " + day + " \u05D1" + months[mon - 1] + " " + new Date().getFullYear() + " \u05D1\u05E9\u05E2\u05D4 " + time + _tod;
   } catch (_) {
     return "";
   }
