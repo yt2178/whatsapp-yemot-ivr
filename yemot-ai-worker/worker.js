@@ -511,6 +511,10 @@ var worker_default = {
       let cursor;
       do {
         try {
+          await hqScanDrop(env);
+          await hqDrain(env);
+        } catch (_) {}
+        try {
           const jl = await env.USER_MEMORY.list({ prefix: "tlk_job_" });
           for (const jk of jl.keys || []) {
             try {
@@ -570,6 +574,10 @@ var worker_default = {
     if (url.pathname.startsWith("/tlk/")) {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       return await handleTlkRequest(env, params, callerPhone, ctx);
+    }
+    if (url.pathname.startsWith("/tlk-hq/")) {
+      if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(8) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
+      return await handleHqRequest(env, params, callerPhone, ctx);
     }
 
     const mailboxAuth = url.pathname.startsWith("/ivr/") ? url.pathname.slice(5) : "";
@@ -2730,7 +2738,7 @@ async function tlkWhisper(env, blob, style, extraDict) {
 __name(tlkWhisper, "tlkWhisper");
 __name2(tlkWhisper, "tlkWhisper");
 __name22(tlkWhisper, "tlkWhisper");
-async function tlkProcessBlob(env, audioBlob, callerPhone) {
+async function tlkProcessBlob(env, audioBlob, callerPhone, skipEdit) {
   if (!audioBlob || audioBlob.size < 1000) return { error: "empty" };
   const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
   const style = ["torah", "hasidic", "yiddish"].includes(cfg.style) ? cfg.style : "general";
@@ -2753,7 +2761,7 @@ async function tlkProcessBlob(env, audioBlob, callerPhone) {
   if (!raw) return { error: "silent" };
   logEvent("tlk_whisper_ok", { ms: Date.now() - t0, chars: raw.length, chunks: blobs.length });
   let final = raw;
-  if (raw.length > 12) {
+  if (!skipEdit && raw.length > 12) {
     const words = raw.split(/\s+/).length;
     const aiPrompt = TLK_STYLE_AI[style] + (cfg.customPrompt ? "\n\nהנחיה אישית מהמשתמש (פעל לפיה בנוסף): " + String(cfg.customPrompt).slice(0, 400) : "");
     const edited = await groqChatShort(env, aiPrompt, raw, Math.min(4000, Math.max(400, words * 3)));
@@ -2903,7 +2911,7 @@ __name22(smtpSendMail, "smtpSendMail");
 async function tlkSendMail(env, callerPhone, item, mail) {
   if (!mail || !/.+@.+/.test(mail)) return false;
   const isTorah = item.style === "torah";
-  const subj = "תמלול " + (isTorah ? "תורני" : "") + " - " + tlkDateStr(item.at);
+  const subj = (item.via === "hq" ? "תמלול איכותי" : "תמלול") + " " + (isTorah ? "תורני" : "") + " - " + tlkDateStr(item.at);
   let wavBlob = null;
   if (item.audio) {
     try {
@@ -3105,6 +3113,171 @@ __name2(handleTlkRequest, "handleTlkRequest");
 __name22(handleTlkRequest, "handleTlkRequest");
 
 // ===================== אתר אישי - תמלול =====================
+// ===== שלוחת האיכות הגבוהה (HQ) =====
+const HQ_BACKOFF = [5, 15, 45, 90, 180];
+__name(HQ_BACKOFF, "HQ_BACKOFF");
+__name2(HQ_BACKOFF, "HQ_BACKOFF");
+__name22(HQ_BACKOFF, "HQ_BACKOFF");
+async function hqRefine(env, raw, cfg) {
+  const style = ["torah", "hasidic", "yiddish"].includes(cfg.style) ? cfg.style : "general";
+  const base = TLK_STYLE_AI[style];
+  const custom = cfg.customPrompt ? "\n\nהנחיה אישית מהמשתמש (חובה לקיים): " + String(cfg.customPrompt).slice(0, 400) : "";
+  const dict = cfg.whisperDict ? "\nמונחים ושמות רלוונטיים: " + String(cfg.whisperDict).slice(0, 500) : "";
+  const W = 3500, OV = 500;
+  const chunks = [];
+  for (let i = 0; i < raw.length; i += W - OV) chunks.push({ text: raw.slice(i, i + W), cont: i > 0 });
+  const out = [];
+  for (const ch of chunks) {
+    const p1 = base + custom + dict + "\n\nזו הקלטה שמעובדת במצב איכות מקסימלית. עבור על הקטע בקפידה: פיסוק מלא ומדויק, חלוקה לפסקאות הגיוניות, פתיחת ראשי תיבות גורים, תיקון שיבושי זיהוי לפי ההקשר. שמור על כל מילה מהתוכן המקורי, אל תשמיט, אל תוסיף, אל תתמצת." + (ch.cont ? "\nזהו המשך של קטע קודם — המשך ברצף בלי כותרת." : "");
+    let e = await groqChatShort(env, p1, ch.text, 4000);
+    if (e) {
+      const w0 = ch.text.split(/\s+/).length, w1 = e.split(/\s+/).length;
+      if (Math.abs(w1 - w0) > Math.max(6, Math.ceil(w0 * 0.3))) e = null;
+    }
+    out.push(e || ch.text);
+  }
+  let merged = out.join("\n\n");
+  if (merged.length > 400 && merged.length <= 12000) {
+    const p2 = base + custom + "\n\nלהלן תמלול שכבר נערך. בצע מעבר ליטוש אחרון: אחידות פיסוק ופסקאות, תיקון שאריות שיבושי הקשבה, יישור מינוח. אל תשנה תוכן ואל תשמיט דברים.";
+    const m2 = await groqChatShort(env, p2, merged, 4000);
+    if (m2) {
+      const w0 = merged.split(/\s+/).length, w1 = m2.split(/\s+/).length;
+      if (Math.abs(w1 - w0) <= Math.max(6, Math.ceil(w0 * 0.15))) merged = m2;
+    }
+  }
+  return merged;
+}
+__name(hqRefine, "hqRefine");
+__name2(hqRefine, "hqRefine");
+__name22(hqRefine, "hqRefine");
+async function hqRunJob(env, jobId) {
+  const job = await tlkLoad(env, "tlk_hqjob_" + jobId);
+  if (!job || job.done) return true;
+  job.attempts = (job.attempts || 0) + 1;
+  try {
+    const res = await tlkProcessRecording(env, job.path, job.phone, true);
+    if (res.error) throw new Error(res.error);
+    const cfg = (await tlkLoad(env, "tlk_cfg_" + job.phone)) || {};
+    const refined = await hqRefine(env, res.raw, cfg);
+    const item = { id: "t" + Date.now(), at: job.at || Date.now(), updated: Date.now(), text: refined, raw: res.raw, style: res.style, via: "hq" };
+    if (res.blob && res.blob.size < 30 * 1024 * 1024 && await tlkStoreAudio(env, res.blob, item.id)) item.audio = item.id;
+    let list = (await tlkLoad(env, "tlk_" + job.phone)) || [];
+    list = list.filter((x) => x.id !== jobId && x.id !== "h" + jobId.slice(1));
+    list.unshift(item);
+    if (list.length > 50) list = list.slice(0, 50);
+    await tlkStore(env, "tlk_" + job.phone, list);
+    const mail = (await tlkLoad(env, "tlk_mail_" + job.phone)) || "y0508352872@gmail.com";
+    if (mail) await tlkSendMail(env, job.phone, item, mail);
+    logEvent("hq_job_done", { chars: refined.length, attempts: job.attempts, ms: Date.now() - job.at });
+    await tlkStore(env, "tlk_hqjob_" + jobId, null);
+    return true;
+  } catch (e) {
+    logEvent("hq_job_retry", { attempts: job.attempts, reason: String(e?.message || e).slice(0, 60) });
+    if (job.attempts >= HQ_BACKOFF.length) {
+      let list = (await tlkLoad(env, "tlk_" + job.phone)) || [];
+      list.unshift({ id: "e" + Date.now(), at: Date.now(), updated: Date.now(), status: "error", via: "hq", text: "תמלול איכותי נכשל אחרי " + job.attempts + " ניסיונות: " + String(e?.message || e) });
+      await tlkStore(env, "tlk_" + job.phone, list);
+      await tlkStore(env, "tlk_hqjob_" + jobId, null);
+      return true;
+    }
+    job.nextAt = Date.now() + HQ_BACKOFF[Math.min(job.attempts - 1, HQ_BACKOFF.length - 1)] * 60000;
+    await tlkStore(env, "tlk_hqjob_" + jobId, job);
+    return false;
+  }
+}
+__name(hqRunJob, "hqRunJob");
+__name2(hqRunJob, "hqRunJob");
+__name22(hqRunJob, "hqRunJob");
+async function hqScanDrop(env) {
+  try {
+    const r = await fetch("https://www.call2all.co.il/ym/api/GetIVR2Dir?token=" + env.YEMOT_TOKEN + "&path=ivr2:8/drop", { headers: { "User-Agent": "Mozilla/5.0" } });
+    const j = await r.json().catch(() => null);
+    const files = (j && j.files) || [];
+    const seen = (await tlkLoad(env, "hq_seen")) || [];
+    let added = 0;
+    for (const f of files) {
+      const nm = String(f.name || "");
+      const isAudio = /\.(wav|mp3|m4a|ogg|flac|aac)$/i.test(nm);
+      const isM = /^M\d+/i.test(nm);
+      const seenArr = Array.isArray(seen) ? seen : [];
+      const isSeen = seenArr.indexOf(nm) >= 0;
+      if (!isAudio || isM || isSeen) continue;
+      const jobId = "h" + Date.now() + "_" + Math.floor(Math.random() * 900 + 100);
+      await tlkStore(env, "tlk_hqjob_" + jobId, { phone: "0537876782", path: "8/drop/" + nm, at: Date.now(), attempts: 0, nextAt: 0 });
+      seen.unshift(nm);
+      added++;
+    }
+    if (added) await tlkStore(env, "hq_seen", seen.slice(0, 400));
+    logEvent("hq_scan", { found: files.length, added });
+    return added;
+  } catch (e) { logEvent("hq_scan_failed", {}); return 0; }
+}
+__name(hqScanDrop, "hqScanDrop");
+__name2(hqScanDrop, "hqScanDrop");
+__name22(hqScanDrop, "hqScanDrop");
+async function hqDrain(env) {
+  try {
+    const jl = await env.USER_MEMORY.list({ prefix: "tlk_hqjob_" });
+    let ran = 0;
+    for (const jk of jl.keys || []) {
+      const jraw = await env.USER_MEMORY.get(jk.name);
+      if (!jraw) continue;
+      let j = null;
+      try { j = JSON.parse(jraw); } catch (_) {}
+      if (!j) continue;
+      if ((j.nextAt || 0) > Date.now()) continue;
+      await hqRunJob(env, jk.name.replace("tlk_hqjob_", ""));
+      ran++;
+    }
+    return ran;
+  } catch (_) { return 0; }
+}
+__name(hqDrain, "hqDrain");
+__name2(hqDrain, "hqDrain");
+__name22(hqDrain, "hqDrain");
+async function handleHqRequest(env, params, callerPhone, ctx) {
+  callerPhone = normalizeIsraelPhone(callerPhone);
+  const isOwner = !env.MAILBOX_OWNER_PHONE || !callerPhone || callerPhone.endsWith("7876782");
+  logEvent("hq_request", { caller: String(callerPhone).slice(-4), hasLink: Boolean(params.link), menu: String(params.menu || "") });
+  const recPath = params.link || params.file_path || "";
+  if (recPath && String(recPath).includes(".wav")) {
+    const jobId = "h" + Date.now();
+    await tlkStore(env, "tlk_hqjob_" + jobId, { phone: callerPhone || "0537876782", path: String(recPath), at: Date.now(), attempts: 0, nextAt: 0 });
+    let list = (await tlkLoad(env, "tlk_" + (callerPhone || "0537876782"))) || [];
+    list.unshift({ id: jobId, at: Date.now(), updated: Date.now(), status: "processing", via: "hq", text: "", raw: "" });
+    await tlkStore(env, "tlk_" + (callerPhone || "0537876782"), list);
+    const p = hqRunJob(env, jobId);
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+    return tlkSay(env, "ההקלטה נקלטה לתמלול באיכות גבוהה. העיבוד עשוי להימשך זמן רב. התמלול יישלח למייל ולאזור האישי. שלום.");
+  }
+  const menu = String(params.menu || "");
+  if (menu === "1") return tlkRead(env, "הקלט אחרי הצליל. בסיום הקש סולמית או נתק. ההקלטה תעובד במצב איכות מקסימלי.", "link,,record,/8/rec,,no,yes,,1,3600");
+  if (menu === "2") {
+    const added = await hqScanDrop(env);
+    const ran = await hqDrain(env);
+    return tlkSay(env, added ? "נמצאו " + added + " קבצים חדשים בתיקיית ההשלכה והועברו לתמלול באיכות גבוהה." : "אין קבצים חדשים בתיקיית ההשלכה. " + (ran ? "הופעלו תמלולים שהמתינו." : "אין תמלולים בהמתנה."));
+  }
+  if (menu === "3") {
+    let pending = 0;
+    try {
+      const jl = await env.USER_MEMORY.list({ prefix: "tlk_hqjob_" });
+      for (const jk of jl.keys || []) { const v = await env.USER_MEMORY.get(jk.name); if (v) pending++; }
+    } catch (_) {}
+    return tlkSay(env, pending ? "בתור האיכות ממתינים כרגע " + pending + " תמלולים בעיבוד." : "תור התמלול באיכות גבוהה ריק, הכל טופל.");
+  }
+  const wf = await ttsTextToYemotFile(env, "ברוכים הבאים לשלוחת התמלול באיכות גבוהה. להקלטה מיידית הקש אחת. לתמלול קבצים שהושלכו לתיקיית השיתוף הקש שתיים. לסטטוס התור הקש שלוש.");
+  const mf = await ttsTextToYemotFile(env, "להקלטה מיידית לתמלול איכותי הקש אחת. לתמלול קבצים שהושלכו לתיקיית השיתוף הקש שתיים. לסטטוס התור הקש שלוש.");
+  if (mf) {
+    let b = "read=f-" + mf + "=menu,no,1,1,20,Digits,yes,yes,,,,,None,";
+    if (wf) b = "id_list_message=f-" + wf + "&" + b;
+    return new Response(b, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
+  return tlkRead(env, "להקלטה מיידית לתמלול איכותי הקש אחת. לתמלול קבצים שהושלכו לתיקיית השיתוף הקש שתיים. לסטטוס התור הקש שלוש.", "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
+}
+__name(handleHqRequest, "handleHqRequest");
+__name2(handleHqRequest, "handleHqRequest");
+__name22(handleHqRequest, "handleHqRequest");
+
 async function tlkSiteAuth(env, url, request) {
   const auth = request.headers.get("Authorization") || "";
   let token = auth.startsWith("Bearer ") ? auth.slice(7) : (url.searchParams.get("t") || "");
