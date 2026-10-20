@@ -2847,7 +2847,7 @@ __name22(tlkStoreAudio, "tlkStoreAudio");
 // ===== מייל ישיר עם קובץ מצורף (Gmail SMTP דרך sockets) =====
 function b64s(str) { return btoa(unescape(encodeURIComponent(str))); }
 __name(b64s, "b64s");
-async function smtpSendMail(env, to, subject, textBody, wavBlob) {
+async function smtpSendMail(env, to, subject, textBody, wavBlob, docxBlob) {
   const pass = env.GMAIL_APP_PASS;
   if (!pass) return false;
   const from = "y0508352872@gmail.com";
@@ -2885,13 +2885,16 @@ async function smtpSendMail(env, to, subject, textBody, wavBlob) {
     let msg = "From: " + from + "\r\nTo: " + to + "\r\nSubject: =?UTF-8?B?" + b64s(subject) + "?=\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"" + boundary + "\"\r\n\r\n";
     msg += "--" + boundary + "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n";
     msg += b64s(textBody) + "\r\n";
-    if (wavBlob && wavBlob.size > 1000 && wavBlob.size < 15 * 1024 * 1024) {
-      const ab = await wavBlob.arrayBuffer();
+    const attPart = async (blob, ct, fn) => {
+      if (!blob || blob.size <= 1000 || blob.size >= 15 * 1024 * 1024) return "";
+      const ab = await blob.arrayBuffer();
       let b64 = "";
       const u8 = new Uint8Array(ab);
       for (let i = 0; i < u8.length; i += 12000) b64 += btoa(String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + 12000, u8.length)))) + "\r\n";
-      msg += "--" + boundary + "\r\nContent-Type: audio/wav\r\nContent-Disposition: attachment; filename=\"recording.wav\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64;
-    }
+      return "--" + boundary + "\r\nContent-Type: " + ct + "\r\nContent-Disposition: attachment; filename=\"" + fn + "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n" + b64;
+    };
+    msg += await attPart(docxBlob, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "transcription.docx");
+    msg += await attPart(wavBlob, "audio/wav", "recording.wav");
     msg += "--" + boundary + "--\r\n";
     const enc = new TextEncoder().encode(msg + ".\r\nQUIT\r\n");
     await w.write(enc);
@@ -2908,6 +2911,69 @@ __name(smtpSendMail, "smtpSendMail");
 __name2(smtpSendMail, "smtpSendMail");
 __name22(smtpSendMail, "smtpSendMail");
 
+// ===== יצירת קובץ Word (.docx) =====
+const DOCX_CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1; t[n] = c >>> 0; } return t; })();
+__name(DOCX_CRC_TABLE, "DOCX_CRC_TABLE");
+__name2(DOCX_CRC_TABLE, "DOCX_CRC_TABLE");
+__name22(DOCX_CRC_TABLE, "DOCX_CRC_TABLE");
+function crc32(u8) { let c = 4294967295; for (let i = 0; i < u8.length; i++) c = DOCX_CRC_TABLE[(c ^ u8[i]) & 255] ^ c >>> 8; return (c ^ 4294967295) >>> 0; }
+__name(crc32, "crc32");
+__name2(crc32, "crc32");
+__name22(crc32, "crc32");
+function xmlEsc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+__name(xmlEsc, "xmlEsc");
+__name2(xmlEsc, "xmlEsc");
+__name22(xmlEsc, "xmlEsc");
+function makeDocx(text, title) {
+  const paras = String(text).split(/\n+/).filter((p) => p.trim());
+  let doc = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>';
+  doc += '<w:p><w:pPr><w:bidi/><w:jc w:val="right"/></w:pPr><w:r><w:rPr><w:rtl/><w:b/><w:sz w:val="32"/></w:rPr><w:t xml:space="preserve">' + xmlEsc(title || "") + '</w:t></w:r></w:p>';
+  for (const p of paras) {
+    doc += '<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">' + xmlEsc(p.trim()) + "</w:t></w:r></w:p>";
+  }
+  doc += '<w:sectPr><w:bidi/></w:sectPr></w:body></w:document>';
+  const ct = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>';
+  const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
+  const entries = [["[Content_Types].xml", ct], ["_rels/.rels", rels], ["word/document.xml", doc]];
+  const enc = new TextEncoder();
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nu8 = enc.encode(name);
+    const du8 = enc.encode(content);
+    const crc = crc32(du8);
+    const lh = new Uint8Array(30 + nu8.length);
+    const dv = new DataView(lh.buffer);
+    dv.setUint32(0, 67324752, true); dv.setUint16(4, 20, true); dv.setUint16(6, 2048, true);
+    dv.setUint16(8, 0, true); dv.setUint16(10, 0, true); dv.setUint16(12, 0, true);
+    dv.setUint32(14, crc, true); dv.setUint32(18, du8.length, true); dv.setUint32(22, du8.length, true);
+    dv.setUint16(26, nu8.length, true); dv.setUint16(28, 0, true);
+    lh.set(nu8, 30);
+    chunks.push(lh, du8);
+    const ce = new Uint8Array(46 + nu8.length);
+    const cv = new DataView(ce.buffer);
+    cv.setUint32(0, 33639248, true); cv.setUint16(4, 20, true); cv.setUint16(6, 2048, true);
+    cv.setUint16(8, 0, true); cv.setUint16(10, 0, true); cv.setUint16(12, 0, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, du8.length, true); cv.setUint32(24, du8.length, true);
+    cv.setUint16(28, nu8.length, true); cv.setUint16(30, 0, true); cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true); cv.setUint16(36, 0, true); cv.setUint32(38, 0, true); cv.setUint32(42, offset, true);
+    ce.set(nu8, 46);
+    central.push(ce);
+    offset += lh.length + du8.length;
+  }
+  let cdSize = 0;
+  for (const c of central) cdSize += c.length;
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 101010256, true); ev.setUint16(8, entries.length, true); ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...chunks, ...central, eocd], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+__name(makeDocx, "makeDocx");
+__name2(makeDocx, "makeDocx");
+__name22(makeDocx, "makeDocx");
+
 async function tlkSendMail(env, callerPhone, item, mail) {
   if (!mail || !/.+@.+/.test(mail)) return false;
   const isTorah = item.style === "torah";
@@ -2919,11 +2985,23 @@ async function tlkSendMail(env, callerPhone, item, mail) {
       if (d.ok) wavBlob = await d.blob();
     } catch (_) {}
   }
-  let body = item.text + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw + "\n—————\nהוקלט ב" + tlkDateStr(item.at) + ". סגנון: " + (isTorah ? "תורני" : "רגיל") + ".";
-  if (wavBlob && wavBlob.size >= 15 * 1024 * 1024) body += "\nההקלטה גדולה ממגבלת הצירוף וזמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
-  if (await smtpSendMail(env, mail, subj, body, wavBlob)) return true;
-  // גשר Apps Script (טקסט בלבד) - הקריאה המקורית
-  body += "\n\nהקלטת השמע זמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
+  const txt = item.text || "";
+  const isLong = txt.length > 1500;
+  const isMed = txt.length > 450;
+  const foot = "\n\n—————\nהוקלט ב" + tlkDateStr(item.at) + (isMed || isLong ? "\nהאזנה להקלטה ועריכת התמלול: https://yemot-ai.y0508352872.workers.dev/tlk-site" : "");
+  let body, docx = null;
+  if (isLong) {
+    docx = makeDocx(txt + "\n\n—————\nתמלול גולמי (לפני עריכה):\n" + item.raw, subj);
+    body = txt.split(/\n/)[0].slice(0, 220) + "...\n\nהתמלול המלא מצורף בקובץ וורד." + foot;
+  } else {
+    body = txt + foot;
+  }
+  if (wavBlob && wavBlob.size >= 15 * 1024 * 1024) wavBlob = null;
+  if (await smtpSendMail(env, mail, subj, body, wavBlob, docx)) return true;
+  // גשר Apps Script (טקסט בלבד) - אין תמיכה בקבצים מצורפים
+  if (isLong) body = txt + "\n\n(קובץ הוורד יופעל במייל ישיר - כרגע מופיע התמלול במלואו)" + foot;
+  else body += wavBlob || item.audio ? "" : "";
+  if (item.audio) body += "\n\nהקלטת השמע זמינה באזור האישי: https://yemot-ai.y0508352872.workers.dev/tlk-site";
   try {
     const r = await callBridge(env, { action: "send", to: mail, subject: subj, body }, 1);
     logEvent("tlk_mail", { ok: Boolean(r && r.ok) });
