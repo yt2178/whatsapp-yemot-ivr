@@ -2652,7 +2652,9 @@ const TLK_STYLE_AI = {
 __name(TLK_STYLE_AI, "TLK_STYLE_AI");
 const TLK_WHISPER_PROMPT = {
   general: "תמלול עברית מדוברת, משפטים ברורים, שמות פרטיים בעברית, פיסוק מלא.",
-  torah: "תמלול שיעור תורני בעברית: רמב״ם, רש״י, תוספות, סוגיא, קושיא, תירוץ, נפקא מינה, מיגו, סברא, אליבא דהלכתא, ריטב״א, מהרש״א, שו״ע, משנ״ב, גמרא, ברייתא, מאי קמ״ל, הכי קאמר. פיסוק מלא."
+  torah: "תמלול שיעור תורני בעברית: רמב״ם, רש״י, תוספות, סוגיא, קושיא, תירוץ, נפקא מינה, מיגו, סברא, אליבא דהלכתא, ריטב״א, מהרש״א, שו״ע, משנ״ב, גמרא, ברייתא, מאי קמ״ל, הכי קאמר, שפתי חכמים, מהרש״א, תוספות ד״ה, אליבא, להלכה למעשה. פיסוק מלא.",
+  hasidic: "תמלול בלשון הקודש בהגייה חסידית: שאבעס, יוי״ט, רבינו, דביקות, טיש, הידור, קידוש השם, שטיבל, בעלזא, חב״ד, ברסלב, גור, ויז׳ניץ, סאטמאר, רבי׳ם, אדמו״ר, התקשרות, התבודדות. פיסוק מלא.",
+  yiddish: "טראַנסקריפּציע אין יידיש, גאַנצע זאַצן, פֿולע פּונקטואַציע. אידישע ווערטער אַזוי ווי רבי, שול, משיח, גמרא, סדר, תפילה, שבת, יום טוב, כּבֿוד."
 };
 __name(TLK_WHISPER_PROMPT, "TLK_WHISPER_PROMPT");
 async function tlkSay(env, text, readParams) {
@@ -2707,16 +2709,23 @@ function tlkWavSplit(buf, maxBytes) {
 __name(tlkWavSplit, "tlkWavSplit");
 __name2(tlkWavSplit, "tlkWavSplit");
 __name22(tlkWavSplit, "tlkWavSplit");
-async function tlkWhisper(env, blob, style) {
-  const fd = new FormData();
-  fd.append("file", blob, "recording.wav");
-  fd.append("model", "whisper-large-v3");
-  fd.append("language", "he");
-  fd.append("temperature", "0");
-  fd.append("prompt", TLK_WHISPER_PROMPT[style]);
-  const wr = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.GROQ_KEY }, body: fd });
-  if (!wr.ok) { logEvent("tlk_whisper_failed", { status: wr.status }); return null; }
-  return String((await wr.json()).text || "").trim();
+async function tlkWhisper(env, blob, style, extraDict) {
+  const prompt = (TLK_WHISPER_PROMPT[style] || TLK_WHISPER_PROMPT.general) + (extraDict ? " מילים נוספות לזיהוי: " + extraDict : "");
+  const lang = style === "yiddish" ? "yi" : "he";
+  const attempt = async (model) => {
+    const fd = new FormData();
+    fd.append("file", blob, "recording.wav");
+    fd.append("model", model);
+    fd.append("language", lang);
+    fd.append("temperature", "0");
+    fd.append("prompt", prompt);
+    const wr = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + env.GROQ_KEY }, body: fd });
+    if (!wr.ok) { logEvent("tlk_whisper_failed", { model, status: wr.status }); return null; }
+    return String((await wr.json()).text || "").trim();
+  };
+  let t = await attempt("whisper-large-v3");
+  if (t === null) t = await attempt("whisper-large-v3-turbo");
+  return t;
 }
 __name(tlkWhisper, "tlkWhisper");
 __name2(tlkWhisper, "tlkWhisper");
@@ -2724,7 +2733,8 @@ __name22(tlkWhisper, "tlkWhisper");
 async function tlkProcessBlob(env, audioBlob, callerPhone) {
   if (!audioBlob || audioBlob.size < 1000) return { error: "empty" };
   const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
-  const style = cfg.style === "torah" ? "torah" : "general";
+  const style = ["torah", "hasidic", "yiddish"].includes(cfg.style) ? cfg.style : "general";
+  const dict = typeof cfg.whisperDict === "string" ? cfg.whisperDict.slice(0, 500) : "";
   let blobs = [audioBlob];
   if (audioBlob.size > 30 * 1024 * 1024) blobs.holdAudio = false;
   if (audioBlob.size > 18 * 1024 * 1024) {
@@ -2735,7 +2745,7 @@ async function tlkProcessBlob(env, audioBlob, callerPhone) {
   const t0 = Date.now();
   const raws = [];
   for (const b of blobs) {
-    const t = await tlkWhisper(env, b, style);
+    const t = await tlkWhisper(env, b, style, dict);
     if (t === null) { if (raws.length) break; return { error: "whisper" }; }
     if (t) raws.push(t);
   }
@@ -2745,7 +2755,8 @@ async function tlkProcessBlob(env, audioBlob, callerPhone) {
   let final = raw;
   if (raw.length > 12) {
     const words = raw.split(/\s+/).length;
-    const edited = await groqChatShort(env, TLK_STYLE_AI[style], raw, Math.min(4000, Math.max(400, words * 3)));
+    const aiPrompt = TLK_STYLE_AI[style] + (cfg.customPrompt ? "\n\nהנחיה אישית מהמשתמש (פעל לפיה בנוסף): " + String(cfg.customPrompt).slice(0, 400) : "");
+    const edited = await groqChatShort(env, aiPrompt, raw, Math.min(4000, Math.max(400, words * 3)));
     if (edited) {
       const eWords = edited.split(/\s+/).length;
       if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
@@ -2926,7 +2937,7 @@ async function handleTlkRequest(env, params, callerPhone, ctx) {
   if (!callerPhone) return tlkSay(env, "שגיאה בזיהוי המאזין, נסה שוב");
   const key = "tlk_" + callerPhone;
   const cfg = (await tlkLoad(env, "tlk_cfg_" + callerPhone)) || {};
-  const c = { sendEmail: cfg.sendEmail === undefined ? true : cfg.sendEmail !== false, playResult: cfg.playResult !== false, style: cfg.style === "torah" ? "torah" : "general", autoHangup: cfg.approve !== true, approve: cfg.approve === true, quickRec: cfg.quickRec === true };
+  const c = { sendEmail: cfg.sendEmail === undefined ? true : cfg.sendEmail !== false, playResult: cfg.playResult !== false, style: ["torah", "hasidic", "yiddish"].includes(cfg.style) ? cfg.style : "general", autoHangup: cfg.approve !== true, approve: cfg.approve === true, quickRec: cfg.quickRec === true };
   const isOwner = !env.MAILBOX_OWNER_PHONE || callerPhone.endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
   const mail = (await tlkLoad(env, "tlk_mail_" + callerPhone)) || (isOwner ? "y0508352872@gmail.com" : "");
   const digitsHe = (n) => String(n).split("").map((d) => ["אפס", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה", "תשע"][Number(d)]).join(", ");
@@ -3058,7 +3069,13 @@ async function handleTlkRequest(env, params, callerPhone, ctx) {
     const setv = String(params.set || "");
     if (setv === "1") { c.playResult = !c.playResult; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "השמעה חוזרת " + (c.playResult ? "הופעלה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
     if (setv === "2") { c.sendEmail = !c.sendEmail; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "שליחה למייל " + (c.sendEmail ? "הופעלה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
-    if (setv === "3") { c.style = c.style === "torah" ? "general" : "torah"; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "סגנון ה-Aי הוגדר ל" + (c.style === "torah" ? "תורני." : "רגיל.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
+    if (setv === "3") {
+      const order = ["general", "torah", "hasidic", "yiddish"];
+      const names = { general: "רגיל", torah: "תורני", hasidic: "חסידי", yiddish: "אידיש" };
+      c.style = order[(order.indexOf(c.style) + 1) % order.length];
+      await tlkStore(env, "tlk_cfg_" + callerPhone, c);
+      return tlkRead(env, "סגנון התמלול הוגדר ל" + names[c.style] + "." + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,");
+    }
     if (setv === "4") { c.quickRec = !c.quickRec; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "כניסה מהירה להקלטה " + (c.quickRec ? "הופעלה, בכניסה לשלוחה תיכף תתחיל ההקלטה." : "כובתה.") + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
     if (setv === "5") { c.approve = false; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "ניתוק מיידי לאחר הקלטה הופעל." + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
     if (setv === "6") { c.approve = true; await tlkStore(env, "tlk_cfg_" + callerPhone, c); return tlkRead(env, "מצב שמיעה ואישור לפני שליחה הופעל." + setPrompt, "set,no,1,1,25,Digits,yes,yes,,,,,None,"); }
@@ -3070,7 +3087,7 @@ async function handleTlkRequest(env, params, callerPhone, ctx) {
     let say = "יש לך " + list.filter((x) => !x.status).length + " תמלולים שמורים. ";
     say += "מפתח גרוק לתמלול פעיל. ";
     say += mail ? "השליחה למייל פעילה לכתובת " + mail + ". " : "השליחה למייל כבויה או שלא הוגדרה כתובת. ";
-    say += "סגנון התמלול " + (c.style === "torah" ? "תורני." : "רגיל.");
+    say += "סגנון התמלול " + ({ general: "רגיל.", torah: "תורני.", hasidic: "חסידי.", yiddish: "אידיש." })[c.style] + " ";
     return tlkRead(env, say, "menu,no,1,1,20,Digits,yes,yes,,,,,None,");
   }
   // כניסה ראשונה לשלוחה
@@ -3149,13 +3166,15 @@ async function handleTlkSiteApi(env, url, request) {
     if (path === "/tlk-api/settings" && request.method === "GET") {
       const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
       const mail = (await tlkLoad(env, "tlk_mail_" + phone)) || "";
-      return Response.json({ ok: true, mail, style: cfg.style === "torah" ? "torah" : "general", playResult: cfg.playResult !== false, sendEmail: cfg.sendEmail !== false, approve: cfg.approve === true, quickRec: cfg.quickRec === true }, { headers: J });
+      return Response.json({ ok: true, mail, style: ["torah", "hasidic", "yiddish"].includes(cfg.style) ? cfg.style : "general", whisperDict: cfg.whisperDict || "", customPrompt: cfg.customPrompt || "", playResult: cfg.playResult !== false, sendEmail: cfg.sendEmail !== false, approve: cfg.approve === true, quickRec: cfg.quickRec === true }, { headers: J });
     }
     if (path === "/tlk-api/settings" && request.method === "POST") {
       const b = await request.json().catch(() => null) || {};
       const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
       if (typeof b.mail === "string") await tlkStore(env, "tlk_mail_" + phone, b.mail.trim());
-      if (b.style === "torah" || b.style === "general") cfg.style = b.style;
+      if (["torah", "hasidic", "yiddish", "general"].includes(b.style)) cfg.style = b.style;
+      if (typeof b.whisperDict === "string") cfg.whisperDict = b.whisperDict.slice(0, 500);
+      if (typeof b.customPrompt === "string") cfg.customPrompt = b.customPrompt.slice(0, 400);
       if (typeof b.playResult === "boolean") cfg.playResult = b.playResult;
       if (typeof b.sendEmail === "boolean") cfg.sendEmail = b.sendEmail;
       await tlkStore(env, "tlk_cfg_" + phone, cfg);
@@ -3411,15 +3430,22 @@ select{font-family:inherit;font-size:14px;border:1px solid var(--line);border-ra
   </div>
 </div>
 <div id="sov" class="hide">
-  <div class="modal" style="max-width:430px">
+  <div class="modal" style="max-width:520px">
     <div class="mtop"><b>⚙ הגדרות אישיות</b><span class="sp"><button class="sec" id="sclose" style="padding:7px 12px">✕</button></span></div>
     <div class="mbody" style="padding:20px">
       <label style="font-size:13px;color:var(--mut)">כתובת מייל לקבלת התמלולים</label>
       <input id="smail" type="email" placeholder="you@gmail.com" style="margin:6px 0 16px">
       <label style="font-size:13px;color:var(--mut)">סגנון התמלול</label>
       <select id="sstyle" style="margin:6px 0 16px;width:100%">
-        <option value="general">רגיל</option><option value="torah">תורני (שיעורים ודברי תורה)</option>
+        <option value="general">עברית כללית</option>
+        <option value="torah">תורני ישיבתי (גמרא, רמב״ם, סוגיות)</option>
+        <option value="hasidic">חסידי / לשון הקודש בהגייה חסידית</option>
+        <option value="yiddish">אידיש כשפת אם</option>
       </select>
+      <label style="font-size:13px;color:var(--mut)">מילון אישי לזיהוי בהשמעה (מוזן לוויספר — שמות נדירים, מונחים, שמות חברות)</label>
+      <textarea id="sdict" rows="2" style="margin:6px 0 16px;font-size:14px" placeholder="למשל: מוטקי לוי, חברת שלום בע״מ, הרב אלתר"></textarea>
+      <label style="font-size:13px;color:var(--mut)">הנחיה אישית לעורך ה-AI (פועלת אחרי התמלול)</label>
+      <textarea id="sprompt" rows="3" style="margin:6px 0 16px;font-size:14px" placeholder="למשל: אם נאמר X החלף תמיד ל-Y. או: ערוך כפרוטוקול מסודר עם החלטות מודגשות"></textarea>
     </div>
     <div class="mfoot"><button id="ssave">💾 שמירת הגדרות</button><span class="cnt" id="sinfo"></span></div>
   </div>
@@ -3487,7 +3513,7 @@ function render(){
       +'<button class="star'+(it.fav?' on':'')+'" data-st="'+it.id+'">★</button>'
       +'<div class="d">🕐 '+fmtD(it.at)+(it.appendCount?' · המשכים: '+it.appendCount:'')+(it.edited?' · נערך':'')+(it.via==='site'?' · מהאתר':'')+'</div>'
       +'<div class="t">'+esc(ex)+(ex.length>=110?'...':'')+'</div>'
-      +'<div class="meta"><span class="badge'+(it.style==='torah'?' tor':'')+'">'+(it.style==='torah'?'תורני':'רגיל')+'</span>'+(it.folder?'<span class="badge">📁 '+esc(it.folder)+'</span>':'')+'<span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
+      +'<div class="meta"><span class="badge'+(it.style&&it.style!=='general'?' tor':'')+'">'+({general:'רגיל',torah:'תורני',hasidic:'חסידי',yiddish:'אידיש'}[it.style||'general'])+'</span>'+(it.folder?'<span class="badge">📁 '+esc(it.folder)+'</span>':'')+'<span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
       +'</div>';
   });
   g.innerHTML=h;
@@ -3735,12 +3761,12 @@ $('mapp').onclick=function(){
 $('mshare').onclick=function(){if(!CUR)return;var t=$('etxt').value;if(navigator.share)navigator.share({text:t.slice(0,1500)}).catch(function(){});else{$('mcopy').click()}};
 /* הגדרות */
 $('stbtn').onclick=function(){
-  api('settings').then(function(j){if(!j.ok)return;$('smail').value=j.mail||'';$('sstyle').value=j.style||'general';$('sinfo').textContent=j.playResult===false?'':'';
+  api('settings').then(function(j){if(!j.ok)return;$('smail').value=j.mail||'';$('sstyle').value=j.style||'general';$('sdict').value=j.whisperDict||'';$('sprompt').value=j.customPrompt||'';
   $('sov').classList.remove('hide')});
 };
 $('sclose').onclick=function(){$('sov').classList.add('hide')};
 $('ssave').onclick=function(){
-  api('settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mail:$('smail').value,style:$('sstyle').value})}).then(function(j){if(j.ok){toast('ההגדרות נשמרו ✓');$('sov').classList.add('hide')}});
+  api('settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mail:$('smail').value,style:$('sstyle').value,whisperDict:$('sdict').value,customPrompt:$('sprompt').value})}).then(function(j){if(j.ok){toast('ההגדרות נשמרו ✓');$('sov').classList.add('hide')}});
 };
 
 /* כפתורי עורך */
