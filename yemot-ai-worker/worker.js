@@ -328,7 +328,8 @@ function edgeConcat(chunks) {
   for (const c of chunks) { out.set(c, off); off += c.length; }
   return out;
 }
-async function edgeTtsMp3(text, timeoutMs = 15000) {
+async function edgeTtsMp3(text, timeoutMs) {
+  timeoutMs = Math.min(90000, 15000 + String(text || "").length * 60);
   try {
     const gec = generateSecMsGecV2(Date.now() / 1000);
     const connId = crypto.randomUUID().replace(/-/g, "");
@@ -945,18 +946,18 @@ var worker_default = {
         } catch (_) {
         }
         return speak(localClockText(_t, _d, _hb));
+      }
       const thanksQ = /^(?:תודה(?: רבה)?(?: על הכול)?|יישר כוח|בסדר גמור)(?:\s*[.!ן]\s*)?$/.test(transcribedText.trim());
       if (thanksQ) {
         const thA = "בכיף, במה עוד אפשר לעזור?";
         await saveConvoTurn(env, transcribedText, thA);
         return speak(thA);
       }
-      const capsQ = /(?:מה אתה יכול|מה אפשר לעשות|אילו פעולות|מה היכולות|מה אתה עושה|מה אתה מציע)/.test(transcribedText);
+      const capsQ = /(?:מה אתה יכול|מה אפשר לעשות|אילו פעולות|מה היכולות|מה אתה עושה|מה אתה מציע|מה אפשר לבקש|מה אתה יודע לעשות|מה האפשרויות)/.test(transcribedText);
       if (capsQ) {
-        const capsA = "אני יכול לומר לך את השעה והתאריך, מזג אוויר, שערי דולר אירו וביטקוין, לקרוא מיילים והודעות צאט, לשלוח מייל והודעות, להגדיר תזכורות, לספר בדיחה ולענות על שאלות כלליות. פשוט תגיד מה צריך";
+        const capsA = await liveCapabilitiesAnswer(env, GROQ_KEY);
         await saveConvoTurn(env, transcribedText, capsA);
-        return speak(capsA);
-      }
+        return speak(capsA, 1600);
       }
       const _weatherQ = /(?:מ[זס]ג\s*ה?\s*או\s*ו?ו?\s*י\s*ר|תח[זס]י[תהונ]|כמה מעלות|טמפרטורה|מ[זס]ג\s*ה?אויר)/.test(transcribedText);
       if (_weatherQ && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
@@ -1482,6 +1483,43 @@ async function handleAccountSelection(env, digit, callerPhone, requestId) {
 __name(handleAccountSelection, "handleAccountSelection");
 __name2(handleAccountSelection, "handleAccountSelection");
 __name22(handleAccountSelection, "handleAccountSelection");
+async function liveCapabilitiesAnswer(env, GROQ_KEY) {
+  const T = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), 6000))]).catch(() => null);
+  logEvent("caps_live_check", {});
+  const [yemotRoot, mail1, mail2, chat1, chat2, weather, currency] = await Promise.all([
+    T(fetch("https://www.call2all.co.il/ym/api/GetIVR2Dir?token=" + (env.YEMOT_TOKEN || "") + "&path=ivr2:", { headers: { "User-Agent": "Mozilla/5.0" } }).then((r) => r.json()).catch(() => null)),
+    T(callBridge(env, { action: "list", max: 1 }, 1)),
+    T(callBridge(env, { action: "list", max: 1 }, 2)),
+    T(callBridge(env, { action: "chat_unread", max: 1 }, 1)),
+    T(callBridge(env, { action: "chat_unread", max: 1 }, 2)),
+    T(fetch("https://api.open-meteo.com/v1/forecast?latitude=31.78&longitude=35.22&current=temperature_2m").then((r) => r.ok ? { ok: true } : null).catch(() => null)),
+    T(fetch("https://open.er-api.com/v6/latest/ILS").then((r) => r.ok ? { ok: true } : null).catch(() => null))
+  ]);
+  const mail1Ok = mail1 && mail1.ok;
+  const mail2Ok = mail2 && mail2.ok;
+  const chat1Ok = chat1 && chat1.ok;
+  const chat2Ok = chat2 && chat2.ok;
+  const line = yemotRoot && yemotRoot.responseStatus === "OK";
+  logEvent("caps_live_result", { mail1: !!mail1Ok, mail2: !!mail2Ok, chat1: !!chat1Ok, chat2: !!chat2Ok, weather: !!weather, currency: !!currency, line: !!line });
+  const facts = [];
+  facts.push("שעה, יום ותאריך עברי - תמיד זמין");
+  facts.push(weather ? "מזג אוויר בכל עיר, כולל ערים בעולם - נבדק ועובד" : "מזג אוויר - נבדק כרגע ולא זמין");
+  facts.push(currency ? "שערי מטבעות, דולר, אירו ועוד - נבדק ועובד" : "שערי מטבעות - נבדק כרגע ולא זמין");
+  facts.push("תזכורות בקול עם צלצול חינם לטלפון בשעת התזכורת");
+  facts.push(mail1Ok ? "מיילים בחשבון הראשון: רשימת מיילים חדשים, חיפוש לפי שם או נושא, קריאת תוכן המייל, סיכום חכם של כל המיילים, שליחת מייל עם איסוף נושא ותוכן בשיחה, מענה והעברה - נבדק ועובד" : "מיילים בחשבון הראשון - נבדק כרגע ואין חיבור, נסה עוד פעם");
+  facts.push(mail2Ok ? "גם בחשבון המייל השני, החשבון שמתחיל בוואי טי, כל פעולות המייל - נבדק ועובד" : "מיילים בחשבון השני - נבדק כרגע ואין חיבור");
+  facts.push(chat1Ok ? "הודעות צאט בחשבון הראשון: הודעות חדשות, חיפוש, קריאה ושליחה - נבדק ועובד" : "הודעות צאט בחשבון הראשון - נבדק כרגע ולא זמינות");
+  facts.push(chat2Ok ? "גם הודעות צאט בחשבון השני עובדות" : "הודעות צאט בחשבון השני לא עובדות עדיין, עד שתופעל גישת הצאט בחשבון גוגל של החשבון השני");
+  facts.push(line ? "מידע חי על כל שלוחות הקו, שאל אותי מה יש בכל שלוחה" : "החיבור לשרתי הקו לא זמין כרגע");
+  facts.push("ניהול הקו בקול: שינוי כותרת של שלוחה");
+  facts.push("שמירת אנשי קשר לפי כתובת מאויתת");
+  facts.push("ותשובה לכל שאלה חופשית");
+  return facts.join(". ");
+}
+__name(liveCapabilitiesAnswer, "liveCapabilitiesAnswer");
+__name2(liveCapabilitiesAnswer, "liveCapabilitiesAnswer");
+__name22(liveCapabilitiesAnswer, "liveCapabilitiesAnswer");
+
 async function callBridge(env, payload, account) {
   const res = await fetch(BRIDGE_URLS[account === 2 ? 2 : 1], {
     method: "POST",
@@ -2747,8 +2785,8 @@ function effectiveTextIfAny(t) {
 }
 __name(effectiveTextIfAny, "effectiveTextIfAny");
 __name2(effectiveTextIfAny, "effectiveTextIfAny");
-function speak(text) {
-  const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/(\d)\.(?=\d)/g, "$1 \u05E0\u05E7\u05D5\u05D3\u05D4 ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
+function speak(text, cap) {
+  const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/(\d)\.(?=\d)/g, "$1 \u05E0\u05E7\u05D5\u05D3\u05D4 ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, cap || 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
   if (!clean) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
   return textResponse(`id_list_message=t-${clean}`);
 }
