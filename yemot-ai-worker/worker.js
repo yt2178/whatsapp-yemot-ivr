@@ -3242,6 +3242,13 @@ async function hqRunJob(env, jobId) {
     let list = (await tlkLoad(env, "tlk_" + job.phone)) || [];
     list = list.filter((x) => x.id !== jobId && x.id !== "h" + jobId.slice(1));
     list.unshift(item);
+    if (String(job.path || "").startsWith("8/drop/")) {
+      try {
+        const nm = job.path.split("/").pop();
+        await fetch("https://www.call2all.co.il/ym/api/FileAction?token=" + env.YEMOT_TOKEN + "&path=ivr2:8/drop/" + encodeURIComponent(nm) + "&action=move&target=" + encodeURIComponent("ivr2:8/done/" + nm), { headers: { "User-Agent": "Mozilla/5.0" } });
+      } catch (_) {}
+    }
+
     if (list.length > 50) list = list.slice(0, 50);
     await tlkStore(env, "tlk_" + job.phone, list);
     const mail = (await tlkLoad(env, "tlk_mail_" + job.phone)) || "y0508352872@gmail.com";
@@ -3547,7 +3554,7 @@ main{max-width:1150px;margin:0 auto;padding:20px 16px 60px}
 .tile .t{font-size:15.5px;line-height:1.55;flex:1}
 .tile .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .badge{font-size:11.5px;background:#e3efe9;color:var(--pd);border-radius:12px;padding:3px 9px}
-.badge.tor{background:#efe8dc;color:#7a5b1e}
+.badge.tor{background:#efe8dc;color:#7a5b1e}.badge.hq{background:#f3e8ff;color:#6b21a8}
 .star{position:absolute;top:10px;left:10px;font-size:19px;color:#cdd6d1;background:none;padding:2px}
 .star.on{color:var(--star)}
 .empty{text-align:center;color:var(--mut);padding:60px 10px;font-size:16px}
@@ -3764,7 +3771,7 @@ function render(){
       +'<button class="star'+(it.fav?' on':'')+'" data-st="'+it.id+'">★</button>'
       +'<div class="d">🕐 '+fmtD(it.at)+(it.appendCount?' · המשכים: '+it.appendCount:'')+(it.edited?' · נערך':'')+(it.via==='site'?' · מהאתר':'')+'</div>'
       +'<div class="t">'+esc(ex)+(ex.length>=110?'...':'')+'</div>'
-      +'<div class="meta"><span class="badge'+(it.style&&it.style!=='general'?' tor':'')+'">'+({general:'רגיל',torah:'תורני',hasidic:'חסידי',yiddish:'אידיש'}[it.style||'general'])+'</span>'+(it.folder?'<span class="badge">📁 '+esc(it.folder)+'</span>':'')+'<span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
+      +'<div class="meta">'+(it.via==='hq'?'<span class="badge hq">⚡ איכות</span>':'')+'<span class="badge'+(it.style&&it.style!=='general'?' tor':'')+'">'+({general:'רגיל',torah:'תורני',hasidic:'חסידי',yiddish:'אידיש'}[it.style||'general'])+'</span>'+(it.folder?'<span class="badge">📁 '+esc(it.folder)+'</span>':'')+'<span class="badge">'+wc(it.text)+' מילים</span>'+(it.tags||[]).map(function(t){return '<span class="badge">'+esc(t)+'</span>'}).join('')+'</div>'
       +'</div>';
   });
   g.innerHTML=h;
