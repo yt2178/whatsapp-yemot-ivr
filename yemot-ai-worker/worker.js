@@ -875,7 +875,7 @@ var worker_default = {
       const lineInfoRes = await maybeLineInfo(env, transcribedText);
       if (lineInfoRes) {
         logEvent("line_info", {});
-        return textResponse(lineInfoRes);
+        return speak(lineInfoRes);
       }
       if (clockFast) {
         const WORLD_TZ = [
