@@ -3110,7 +3110,11 @@ async function tlkProcessBlob(env, audioBlob, callerPhone, skipEdit) {
     const edited = await groqChatShort(env.GROQ_KEY, aiPrompt, raw, Math.min(4000, Math.max(400, words * 3)));
     if (edited) {
       const eWords = edited.split(/\s+/).length;
-      if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
+      const rawSet = new Set(raw.split(/\s+/).filter(function(w) { return w.length >= 3; }));
+      const overlap = edited.split(/\s+/).filter(function(w) { return rawSet.has(w); }).length;
+      const overlapOk = rawSet.size === 0 || overlap / Math.max(1, eWords) >= 0.3;
+      if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2)) && overlapOk) final = edited;
+      else if (!overlapOk) logEvent("tlk_edit_overlap_reject", { overlap: Math.round(overlap / Math.max(1, eWords) * 100) });
     }
   }
   return { raw, final, style, blob: audioBlob, seconds: Math.round((Date.now() - t0) / 1000) };
@@ -3357,6 +3361,97 @@ __name(maybeLineInfo, "maybeLineInfo");
 __name2(maybeLineInfo, "maybeLineInfo");
 __name22(maybeLineInfo, "maybeLineInfo");
 
+async function maybeIdentifySong(env, file, garbledText) {
+  try {
+    const name = String((file && file.name) || "");
+    const base = name.replace(/\.[A-Za-z0-9]+$/, "").replace(/[_\-]+/g, " ").trim();
+    const latinTokens = (base.match(/[A-Za-z]{3,}/g) || []).filter(function(t) { return !/^(mp3|wav|m4a|audio|record|voice|song)$/i.test(t); });
+    if (latinTokens.length < 2) return null;
+    const GROQ_KEY = env.GROQ_KEY || "";
+    if (!GROQ_KEY) return null;
+    let j = null;
+    const searchModels = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+    for (let attempt = 0; attempt < 3 && !j; attempt++) {
+      for (const mdl of searchModels) {
+        const rr = await fetch("https://api.groq.com/openai/v1/responses", {
+          method: "POST",
+          headers: { Authorization: "Bearer " + GROQ_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: mdl,
+            instructions: "אתה מומחה לזיהוי שירים חסידיים ופיוטים. חפש לפי שם הקובץ את שם השיר ומבצעיו. לאחר מכן פתח דף מילים בעברית של השיר (ויקיפדיה, זמרשת, שירונט, פורומים וכדומה) וקרא את המילים המלאות שבו. בסוף ענה בשורה אחת: SONG: שם השיר | ARTIST: המבצעים",
+            input: "מה השיר שמתאים לשם הקובץ \"" + base + "\"? פתח גם את דף המילים שלו.",
+            tools: [{ type: "browser_search" }],
+            tool_choice: "required",
+            max_output_tokens: 600
+          })
+        });
+        if (rr.ok) { const jj = await rr.json().catch(function() { return null; }); if (jj && Array.isArray(jj.output) && jj.output.length) { j = jj; break; } }
+        logEvent("song_search_attempt_failed", { attempt: attempt + 1, model: mdl, status: rr.status });
+      }
+      if (!j && attempt < 2) await new Promise(function(r2) { setTimeout(r2, 20000); });
+    }
+    if (!j) { logEvent("song_search_failed", {}); return null; }
+    let finalMsg = "", mcpTexts = "", pageUrl = "";
+    for (const it of (j.output || [])) {
+      if (String(it.type) === "mcp_call") {
+        const argsStr = JSON.stringify(it.arguments || {});
+        const out = String(it.output || "");
+        mcpTexts += "\n" + out;
+        if (pageUrl === "" && argsStr.indexOf("cursor") >= 0 && argsStr.indexOf("id") >= 0 && argsStr.indexOf("query") < 0) {
+          const um = out.match(/URL:\s*(https?:\/\/\S+)/);
+          if (um) pageUrl = um[1];
+        }
+      } else if (String(it.type) === "message") {
+        for (const c of (it.content || [])) if (String(c.type) === "output_text") finalMsg += (c.text || "") + "\n";
+      }
+    }
+    let songName = "", artist = "";
+    const cleanMsg = finalMsg.replace(/\*+/g, "");
+    const sm = cleanMsg.match(/(?:^|\n)[^\n]*?(?:שם השיר|song)\s*[:]\s*([^|\n]+)/i);
+    const cleanVal = function(v) { return String(v || "").replace(/[\u202f\u00a0]/g, " ").replace(/【[^】]*】/g, "").replace(/\s+/g, " ").trim(); };
+    if (sm) songName = cleanVal(sm[1].replace(/\(s\)/gi, ""));
+    const am = cleanMsg.match(/(?:^|\n)[^\n]*?artist(?:\(s\))?\s*[:]\s*([^|\n]+)/i) || cleanMsg.match(/(?:^|\n)[^\n]*?מבצעים\s*[:]\s*([^|\n]+)/i);
+    if (am) artist = cleanVal(am[1]);
+    if (songName.length > 60) songName = songName.slice(0, 60);
+    const lines = mcpTexts.split(/\r?\n/).map(function(l) { return l.replace(/^L\d+:\s*/, "").replace(/\*\*/g, "").replace(/\\([*.|()])/g, "$1").trim(); });
+    const siteWords = /zemereshet|wikipedia|nli\.org|shironet|tab4u|musixmatch|spotify|youtube|facebook|kehilotsharot|apple|chordify|shazam/i;
+    const isVerseLine = function(l) {
+      if (!l || l.length < 10 || l.length > 120) return false;
+      if (/^https?:/i.test(l) || siteWords.test(l)) return false;
+      if (/^(מילים|מילות|לחן|ביצוע|עיבוד|מחבר|מלחין)\b/.test(l)) return false;
+      if (/לייק|הצטרפו|לערוץ|subscrib|פרסומת|צפיות|תנו ל/i.test(l)) return false;
+      if (/[\u0591-\u05C7]/.test(l)) return true;
+      const words = l.split(/\s+/).filter(Boolean);
+      if (words.length < 3 || words.length > 12) return false;
+      const hebrew = (l.match(/[\u05D0-\u05FF]/g) || []).length;
+      return hebrew / l.replace(/\s/g, "").length >= 0.6;
+    };
+    let best = [], cur = [];
+    for (const l of lines) {
+      if (isVerseLine(l)) cur.push(l);
+      else { if (cur.length > best.length) best = cur; cur = []; }
+    }
+    if (cur.length > best.length) best = cur;
+    const hasNiq = function(l) { return /[\u0591-\u05C7]/.test(l); };
+    const niqCount = best.filter(hasNiq).length;
+    if (niqCount >= 4) { const fi = best.findIndex(hasNiq); if (fi > 0) best = best.slice(fi); }
+    if ((best.length < 4 || best.join(" ").length < 80) && !songName) { logEvent("song_lyrics_not_extracted", {}); return null; }
+    if (best.length < 4 || best.join(" ").length < 80) {
+      logEvent("song_name_only", { name: songName });
+      const head = ["🎵 " + songName, artist ? "ביצוע: " + artist : ""].filter(Boolean).join("\n");
+      return { text: head + "\n\n(זוהה אוטומטית לפי שם הקובץ. לא נמצאו המילים המלאות ברשת — תמלול אוטומטי של שירה ומוזיקה מוגבל.)\n\n" + String(garbledText || ""), name: songName, artist: artist, url: pageUrl };
+    }
+    const header = [];
+    if (songName) header.push("🎵 " + songName);
+    if (artist) header.push("ביצוע: " + artist);
+    const text = (header.length ? header.join("\n") + "\n\n" : "") + best.join("\n") + "\n\n(זוהה אוטומטית לפי שם הקובץ — תמלול אוטומטי של שירה ומוזיקה מוגבל. מקור: " + (pageUrl || "חיפוש ברשת") + ")";
+    logEvent("song_identified", { name: songName, lines: best.length });
+    return { text: text, name: songName, artist: artist, url: pageUrl };
+  } catch (_) { logEvent("song_flow_error", {}); return null; }
+}
+__name(maybeIdentifySong, "maybeIdentifySong");
+__name2(maybeIdentifySong, "maybeIdentifySong");
+__name22(maybeIdentifySong, "maybeIdentifySong");
 async function tlkSendMail(env, callerPhone, item, mail) {
   if (!mail || !/.+@.+/.test(mail)) return false;
   const isTorah = item.style === "torah";
@@ -3972,6 +4067,17 @@ async function handleTlkSiteApi(env, url, request) {
       if (res.error === "big") return Response.json({ ok: false, error: "הקובץ גדול מדי לתמלול" }, { headers: J });
       if (res.error) return Response.json({ ok: false, error: "התמלול נכשל, נסו שוב" }, { headers: J });
       const { item } = await tlkSaveTranscript(env, phone, res, null, targetId || null, "site");
+      try {
+        const song = await maybeIdentifySong(env, file, res.final);
+        if (song && item) {
+          item.text = song.text;
+          item.song = { name: song.name, artist: song.artist };
+          item.edited = true;
+          const songList = (await tlkLoad(env, "tlk_" + phone)) || [];
+          const songItem = songList.find(function(x) { return x.id === item.id; });
+          if (songItem) { songItem.text = song.text; songItem.song = item.song; songItem.edited = true; await tlkStore(env, "tlk_" + phone, songList); }
+        }
+      } catch (_) { logEvent("song_hook_error", {}); }
       const cfg = (await tlkLoad(env, "tlk_cfg_" + phone)) || {};
       const isOwner = !env.MAILBOX_OWNER_PHONE || phone.endsWith(String(env.MAILBOX_OWNER_PHONE).replace(/\D/g, "").slice(-9));
       const mail = (await tlkLoad(env, "tlk_mail_" + phone)) || (isOwner ? "y0508352872@gmail.com" : "");
