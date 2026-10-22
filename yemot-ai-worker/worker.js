@@ -2294,7 +2294,7 @@ async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
     try {
       const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
+        headers: { "Authorization": `Bearer ${typeof GROQ_KEY === "string" ? GROQ_KEY : GROQ_KEY.GROQ_KEY}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model: mdl, temperature: 0, max_tokens: maxTokens + 350, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userText }] })
       });
       if (!res.ok) continue;
@@ -2519,7 +2519,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
       return speak("אין הרשאה לגישה למייל ממספר זה");
     }
-    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, יש לי מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. בחיפוש החזר את מילות החיפוש בדיוק כפי שנאמרו בעברית, בלי לתרגם שמות לאנגלית ובלי קידומת from. למשל חפש מיילים מעמנואל זה query עמנואל, ומה המייל האחרון שעמנואל שלח לי זה query עמנואל. חיפוש של שם עברי עובד בגימייל כמו שהוא. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. כשהכתובת נאמרת באותיות ובמספרים בעברית, תרגם אותן לאנגלית: וואי היא האות y, וי היא v, טי היא t, שטרודל הוא @ ונקודה היא . למשל וואי אפס חמש אפס שטרודל גימייל נקודה קום זה y050@gmail.com. אל תשמיט את האות הראשונה של הכתובת. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
+    const plannerSystem = 'אתה מנתש בקשות מייל לפעולות. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. אפשרויות: {"action":"list","params":{"count":5}} רשימת מיילים אחרונים, לבקשה מפורשת להקראת רשימה. {"action":"digest","params":{"timeframe":"day|week|month|all|ask","unread":false}} בדיקה כללית וסיכום חכם של מיילים, לכל בקשת בדיקה כמו האם שלחו לי מייל, מה חדש, בדוק מיילים, יש לי מיילים, משהו חדש או חשוב, ומיילים שלא נקראו. כלל חשוב: בקשת בדיקה אם שלחו מייל מגורם מסוים כמו תבדוק אם שלחו לי מייל מישיבת בית הלוי או האם שלחו לי מייל מעמנואל או תבדוק על המייל מאבא היא search עם שם הגורם כמילות החיפוש, לא digest. שמות קרובי משפחה כמו אבא, אמא, אח, סבא, סבתא הם שמות שולחים לגיטימיים ומוחזרים כמו שנאמרו. כללים לdigest: אם נאמר לא נקראו, לא קראתי או לא נקרא קבע unread שווה true. אם נאמר טווח זמן קבע אותו: היום או יממה אחרונה זה day, שבוע אחרון זה week, חודש אחרון זה month, הכל או כל הזמנים זה all. אם לא נאמר טווח ואין unread קבע timeframe שווה ask. {"action":"summarize","params":{"count":5}} סיכום מיילים. {"action":"read","params":{"index":2}} קריאת מייל לפי מספרו ברשימה. {"action":"search","params":{"query":"..."}} חיפוש מיילים. בחיפוש החזר את מילות החיפוש בדיוק כפי שנאמרו בעברית, בלי לתרגם שמות לאנגלית ובלי קידומת from. למשל חפש מיילים מעמנואל זה query עמנואל, ומה המייל האחרון שעמנואל שלח לי זה query עמנואל. חיפוש של שם עברי עובד בגימייל כמו שהוא. {"action":"send","params":{"to":"...","subject":"...","body":"..."}} שליחת מייל חדש. {"action":"reply","params":{"index":1,"body":"..."}} מענה למייל. {"action":"forward","params":{"index":1,"to":"..."}} העברת מייל. בכתובות מייל: שטרודל פירושו סימן @ ונקודה פירושה נקודה. אם הנמען נאמר בשם או בכינוי ולא בכתובת מלאה, החזר אך ורק את השם שנאמר בשדה to ואל תוסיף דומיין או כתובת בעצמך. גם אם הנמען לא מוכר לך, אם זו בקשת שליחה ברורה החזר send עם השם שנאמר. כלל עדיפות: בקשה לשלוח מייל לאיש כלשהו מחזירה תמיד send גם בלשון עבר כמו שלחתי, וגם אם מוסיפים בקשה לבדוק אם ההודעה הגיעה. search ו list רק לבקשות קריאה. כתובות מייל תמיד באותיות באנגלית בלבד. כשהכתובת נאמרת באותיות ובמספרים בעברית, תרגם אותן לאנגלית: וואי היא האות y, וי היא v, טי היא t, שטרודל הוא @ ונקודה היא . למשל וואי אפס חמש אפס שטרודל גימייל נקודה קום זה y050@gmail.com. אל תשמיט את האות הראשונה של הכתובת. אם הבקשה לא ברורה החזר {"action":"none"}. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר.';
     let plan = {};
     const planRaw = await groqChatShort(GROQ_KEY, plannerSystem, transcribedText, 250);
     const jm = planRaw.match(/\{[\s\S]*\}/);
@@ -2678,7 +2678,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
-    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש היא read עם index לפי המספר שנאמר, אחת זה 1 שתיים זה 2 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread כשהבקשה היא לקרוא, לחפש או לבדוק הודעות שהתקבלו, למשל בדוק את הצאטים, תבדוק אם יש הודעות חדשות, מה חדש או יש הודעות חדשות הן כולן unread. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
+    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש או קרא הודעה מספר אחת או קרא הודעה מספר 1 או הודעה מספר שתיים או קריאת הודעה מספר שלוש היא read עם index לפי המספר שנאמר, אחת או 1 זה 1 שתיים או 2 זה 2 שלוש או 3 זה 3 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread כשהבקשה היא לקרוא, לחפש או לבדוק הודעות שהתקבלו, למשל בדוק את הצאטים, תבדוק אם יש הודעות חדשות, מה חדש או יש הודעות חדשות הן כולן unread. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
@@ -2701,7 +2701,12 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
     if (plan.action === "unread" || plan.action === "search") {
       if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "בדיקה");
       const payload = plan.action === "search" ? { action: "chat_search", query: params.query || "", max: Math.min(parseInt(params.count) || 5, 10) } : { action: "chat_unread", max: Math.min(parseInt(params.count) || 5, 10) };
-      const data = await callBridge(env, payload, account);
+      let data = await callBridge(env, payload, account);
+      if (!data.ok) {
+        await new Promise((r) => setTimeout(r, 1500));
+        data = await callBridge(env, payload, account);
+        logEvent("chat_bridge_retry", { ok: Boolean(data && data.ok) });
+      }
       if (!data.ok) return speak("לא הצלחתי כרגע לקרוא את הודעות הצאט");
       await kvSetList(env, listKey, { messages: data.messages || [], ts: Date.now(), account });
       return speak(fmtChatList(data.messages || []));
@@ -2851,7 +2856,7 @@ __name(tlkDateStr, "tlkDateStr");
 __name2(tlkDateStr, "tlkDateStr");
 __name22(tlkDateStr, "tlkDateStr");
 const TLK_STYLE_AI = {
-  general: "אתה עורך לשוני. קבל תמלול גולמי ממודל זיהוי דיבור והחזר אותו מנוקה בפיסוק: פסיקים, נקודות, סימני שאלה וחלוקה לפסקאות הגיוניות. אסור לשנות, להוסיף או להשמיט אף מילה מהתוכן המקורי. אסור לתרגן. החזר רק את הטקסט המפוסק בלי הקדמות.",
+  general: "אתה עורך לשוני ומגיה של תמלול אוטומטי בעברית. קבל תמלול גולמי ממודל זיהוי דיבור והחזר אותו מתוקן ומנוקה בפיסוק: פסיקים, נקודות, סימני שאלה וחלוקה לפסקאות הגיוניות. חובה לתקן שגיאות זיהוי מובהקות שבהן הופיעה מילה חסרת משמעות או מילה שגויה בעליל לפי ההקשר, כגון: הבנט במקום הבנק, אנה במקום אנא, התניה במקום התניא, מליאדי במקום מליאדי, ש.בר במקום שעבר, שמחה במקום שמחה. תקן רק כשברור חד משמעית מההקשר מה נאמר. מלבד תיקון שגיאות זיהוי ופיסוק אסור לשנות, להוסיף או להשמיט אף מילה. אסור לתרגן. החזר רק את הטקסט המתוקן בלי הקדמות.",
   torah: "אתה עורך לשוני תורני. קבל תמלול גולמי של שיעור או דברי תורה והחזר אותו מנוקה בפיסוק: פסיקים, נקודות, סימני שאלה, וחלוקה לפסקאות לפי מהלך הדברים, עם הבחנה בין קושיא תירוץ וראיה. פתח ראשי תיבות גורים כמו רמב״ם, רש״י, שו״ע, משנ״ב, גמ׳, ברייתא. אסור לשנות, להוסיף או להשמיט אף מילה מהתוכן המקורי. אסור לתרגן. החזר רק את הטקסט המפוסק בלי הקדמות."
 };
 __name(TLK_STYLE_AI, "TLK_STYLE_AI");
@@ -2961,7 +2966,7 @@ async function tlkProcessBlob(env, audioBlob, callerPhone, skipEdit) {
   if (!skipEdit && raw.length > 12) {
     const words = raw.split(/\s+/).length;
     const aiPrompt = TLK_STYLE_AI[style] + (cfg.customPrompt ? "\n\nהנחיה אישית מהמשתמש (פעל לפיה בנוסף): " + String(cfg.customPrompt).slice(0, 400) : "");
-    const edited = await groqChatShort(env, aiPrompt, raw, Math.min(4000, Math.max(400, words * 3)));
+    const edited = await groqChatShort(env.GROQ_KEY, aiPrompt, raw, Math.min(4000, Math.max(400, words * 3)));
     if (edited) {
       const eWords = edited.split(/\s+/).length;
       if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
@@ -3438,13 +3443,13 @@ async function hqRefine(env, raw, cfg) {
   const base = TLK_STYLE_AI[style];
   const custom = cfg.customPrompt ? "\n\nהנחיה אישית מהמשתמש (חובה לקיים): " + String(cfg.customPrompt).slice(0, 400) : "";
   const dict = cfg.whisperDict ? "\nמונחים ושמות רלוונטיים: " + String(cfg.whisperDict).slice(0, 500) : "";
-  const W = 3500, OV = 500;
+  const W = 5000, OV = 600;
   const chunks = [];
   for (let i = 0; i < raw.length; i += W - OV) chunks.push({ text: raw.slice(i, i + W), cont: i > 0 });
   const out = [];
   for (const ch of chunks) {
-    const p1 = base + custom + dict + "\n\nזו הקלטה שמעובדת במצב איכות מקסימלית. עבור על הקטע בקפידה: פיסוק מלא ומדויק, חלוקה לפסקאות הגיוניות, פתיחת ראשי תיבות גורים, תיקון שיבושי זיהוי לפי ההקשר. שמור על כל מילה מהתוכן המקורי, אל תשמיט, אל תוסיף, אל תתמצת." + (ch.cont ? "\nזהו המשך של קטע קודם — המשך ברצף בלי כותרת." : "");
-    let e = await groqChatShort(env, p1, ch.text, 4000);
+    const p1 = "אתה מגיה תמלולי טלפון בעברית במצב איכות מקסימלית. " + (style === "torah" ? "התוכן תורני. " : style === "hasidic" || style === "yiddish" ? "התוכן חסידי. " : "") + "תקן טעויות זיהוי ברורות מההקשר, כגון: אנה במקום אנא, ש. בר במקום שעבר, מהבנט במקום מהבנק, התניה במקום התניא, וכל מילה חסרת משמעות או שגויה בעליל שברור מההקשר מה נאמר באמת. פסק פיסוק מלא וחלק לפסקאות הגיוניות." + custom + dict + "\nהשמור על כל התוכן, אל תוסיף, אל תשמיט, אל תתמצת. החזר רק את הטקסט המתוקן." + (ch.cont ? "\nזהו המשך של קטע קודם, המשך ברצף בלי כותרת." : "") + "\n\n";
+    let e = await groqChatShort(env.GROQ_KEY, p1, ch.text, 4000);
     if (e) {
       const w0 = ch.text.split(/\s+/).length, w1 = e.split(/\s+/).length;
       if (Math.abs(w1 - w0) > Math.max(6, Math.ceil(w0 * 0.3))) e = null;
@@ -3452,12 +3457,22 @@ async function hqRefine(env, raw, cfg) {
     out.push(e || ch.text);
   }
   let merged = out.join("\n\n");
-  if (merged.length > 400 && merged.length <= 12000) {
-    const p2 = base + custom + "\n\nלהלן תמלול שכבר נערך. בצע מעבר ליטוש אחרון: אחידות פיסוק ופסקאות, תיקון שאריות שיבושי הקשבה, יישור מינוח. אל תשנה תוכן ואל תשמיט דברים.";
-    const m2 = await groqChatShort(env, p2, merged, 4000);
-    if (m2) {
-      const w0 = merged.split(/\s+/).length, w1 = m2.split(/\s+/).length;
-      if (Math.abs(w1 - w0) <= Math.max(6, Math.ceil(w0 * 0.15))) merged = m2;
+  if (merged.length > 400) {
+    const p2 = base + custom + "\n\nלהלן תמלול שכבר נערך. בצע מעבר ליטוש אחרון: אחידות פיסוק ופסקאות, תיקון שאריות שיבושי הקשבה (מילים חסרות משמעות או שגויות בעליל לפי ההקשר), יישור מינוח. אל תשנה תוכן ואל תשמיט דברים.";
+    const polish = async (seg) => {
+      const m2 = await groqChatShort(env.GROQ_KEY, p2, seg, 4000);
+      if (!m2) return seg;
+      const w0 = seg.split(/\s+/).length, w1 = m2.split(/\s+/).length;
+      return Math.abs(w1 - w0) <= Math.max(6, Math.ceil(w0 * 0.15)) ? m2 : seg;
+    };
+    if (merged.length <= 12000) {
+      merged = await polish(merged);
+    } else {
+      const chunks2 = [];
+      for (let i = 0; i < merged.length; i += 5500) chunks2.push(merged.slice(i, i + 5500));
+      const pol2 = [];
+      for (const c2 of chunks2) pol2.push(await polish(c2));
+      merged = pol2.join("\n\n");
     }
   }
   return merged;
@@ -3465,6 +3480,71 @@ async function hqRefine(env, raw, cfg) {
 __name(hqRefine, "hqRefine");
 __name2(hqRefine, "hqRefine");
 __name22(hqRefine, "hqRefine");
+function bufToB64(buf) {
+  const u8 = new Uint8Array(buf);
+  let out = "";
+  for (let i = 0; i < u8.length; i += 8192) out += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+  return btoa(out);
+}
+__name(bufToB64, "bufToB64");
+__name2(bufToB64, "bufToB64");
+__name22(bufToB64, "bufToB64");
+async function geminiTranscribe(env, blob, style, dict) {
+  let parts = [blob];
+  if (blob.size > 16 * 1024 * 1024) {
+    const sp = tlkWavSplit(await blob.arrayBuffer(), 16 * 1024 * 1024);
+    if (sp && sp.length) parts = sp;
+  }
+  const texts = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const b64 = bufToB64(await parts[idx].arrayBuffer());
+    const langHint = style === "yiddish" ? "\u05d0\u05d9\u05d3\u05d9\u05e9" : "\u05e2\u05d1\u05e8\u05d9\u05ea";
+    const prompt = "\u05ea\u05de\u05dc\u05dc \u05d0\u05ea \u05d4\u05d4\u05e7\u05dc\u05d8\u05d4 \u05dc" + langHint + " \u05d1\u05de\u05d3\u05d5\u05d9\u05e7 \u05d5\u05d1\u05e9\u05dc\u05de\u05d5\u05ea, \u05db\u05d5\u05dc\u05dc \u05e4\u05d9\u05e1\u05d5\u05e7 \u05de\u05dc\u05d0 \u05d5\u05ea\u05d9\u05e7\u05d5\u05e0\u05d9\u05dd \u05e9\u05dc \u05e9\u05d9\u05d1\u05d5\u05e9\u05d9 \u05d4\u05e7\u05e9\u05d1\u05d4. \u05d0\u05dc \u05ea\u05d5\u05e1\u05d9\u05e3 \u05d4\u05e2\u05e8\u05d5\u05ea \u05d0\u05d5 \u05db\u05d5\u05ea\u05e8\u05d5\u05ea - \u05d4\u05d7\u05d6\u05e8 \u05e8\u05e7 \u05d0\u05ea \u05d4\u05ea\u05de\u05dc\u05d5\u05dc \u05e2\u05e6\u05de\u05d5." + (dict ? " \u05de\u05d5\u05e0\u05d7\u05d9\u05dd \u05e9\u05e2\u05e9\u05d5\u05d9\u05d9\u05dd \u05dc\u05d4\u05d5\u05e4\u05d9\u05e2: " + dict : "");
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + encodeURIComponent(env.GEMINI_API_KEY || ""), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "audio/wav", data: b64 } }] }], generationConfig: { temperature: 0 } })
+    });
+    if (!r.ok) { logEvent("hq_gemini_failed", { status: r.status, part: idx }); return null; }
+    const j = await r.json().catch(() => null);
+    const txt = String((j && j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts || []).map((p) => p.text || "").join("")).trim();
+    if (!txt) { logEvent("hq_gemini_empty", {}); return null; }
+    texts.push(txt);
+  }
+  return texts.join("\n").trim();
+}
+__name(geminiTranscribe, "geminiTranscribe");
+__name2(geminiTranscribe, "geminiTranscribe");
+__name22(geminiTranscribe, "geminiTranscribe");
+async function hqTranscribeBest(env, blob, style, dict) {
+  if (env.ELEVENLABS_API_KEY) {
+    try {
+      const fd = new FormData();
+      fd.append("file", blob, "recording.wav");
+      fd.append("model_id", "scribe_v1");
+      fd.append("tag_audio_events", "false");
+      const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, body: fd });
+      if (r.ok) {
+        const j = await r.json().catch(() => null);
+        const txt = String((j && j.text) || "").trim();
+        if (txt) { logEvent("hq_model", { model: "scribe", chars: txt.length }); return { text: txt, model: "scribe" }; }
+      } else logEvent("hq_scribe_failed", { status: r.status });
+    } catch (_) { logEvent("hq_scribe_error", {}); }
+  }
+  if (env.GEMINI_API_KEY) {
+    try {
+      const txt = await geminiTranscribe(env, blob, style, dict);
+      if (txt) { logEvent("hq_model", { model: "gemini", chars: txt.length }); return { text: txt, model: "gemini" }; }
+    } catch (_) { logEvent("hq_gemini_error", {}); }
+  }
+  const w = await tlkWhisper(env, blob, style, dict);
+  if (w) { logEvent("hq_model", { model: "whisper", chars: w.length }); return { text: w, model: "whisper" }; }
+  return null;
+}
+__name(hqTranscribeBest, "hqTranscribeBest");
+__name2(hqTranscribeBest, "hqTranscribeBest");
+__name22(hqTranscribeBest, "hqTranscribeBest");
+
 async function hqRunJob(env, jobId) {
   const job = await tlkLoad(env, "tlk_hqjob_" + jobId);
   if (!job || job.done) return true;
@@ -3477,12 +3557,23 @@ async function hqRunJob(env, jobId) {
       if (!txt) throw new Error("empty tts");
       res = { raw: txt, style: ((await tlkLoad(env, "tlk_cfg_" + job.phone)) || {}).style || "general", blob: null };
     } else {
-      res = await tlkProcessRecording(env, job.path, job.phone, true);
-      if (res.error) throw new Error(res.error);
+      let pp = String(job.path).trim();
+      while (pp.startsWith("ivr2:") || pp.startsWith("/")) { if (pp.startsWith("ivr2:")) pp = pp.substring(5); if (pp.startsWith("/")) pp = pp.substring(1); }
+      const dlq = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + env.YEMOT_TOKEN + "&path=ivr2:" + pp, { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (!dlq.ok) throw new Error("download");
+      const ablob = await dlq.blob();
+      if (!ablob || ablob.size < 1000) throw new Error("empty");
+      const cfgq = (await tlkLoad(env, "tlk_cfg_" + job.phone)) || {};
+      const styleq = ["torah", "hasidic", "yiddish"].includes(cfgq.style) ? cfgq.style : "general";
+      const dictq = typeof cfgq.whisperDict === "string" ? cfgq.whisperDict.slice(0, 500) : "";
+      const trq = await hqTranscribeBest(env, ablob, styleq, dictq);
+      if (!trq) throw new Error("transcribe");
+      logEvent("hq_transcribed", { model: trq.model, ms: Date.now() - job.at });
+      res = { raw: trq.text, style: styleq, blob: ablob, model: trq.model };
     }
     const cfg = (await tlkLoad(env, "tlk_cfg_" + job.phone)) || {};
     const refined = await hqRefine(env, res.raw, cfg);
-    const item = { id: "t" + Date.now(), at: job.at || Date.now(), updated: Date.now(), text: refined, raw: res.raw, style: res.style, via: "hq" };
+    const item = { id: "t" + Date.now(), at: job.at || Date.now(), updated: Date.now(), text: refined, raw: res.raw, style: res.style, via: "hq", model: res.model || "" };
     if (res.blob && res.blob.size < 30 * 1024 * 1024 && await tlkStoreAudio(env, res.blob, item.id)) item.audio = item.id;
     let list = (await tlkLoad(env, "tlk_" + job.phone)) || [];
     list = list.filter((x) => x.id !== jobId && x.id !== "h" + jobId.slice(1));
@@ -3692,7 +3783,7 @@ async function handleTlkSiteApi(env, url, request) {
       let final = rawTxt;
       if (rawTxt.length > 12) {
         const words = rawTxt.split(/\s+/).length;
-        const edited = await groqChatShort(env, TLK_STYLE_AI[style], rawTxt, Math.min(4000, Math.max(400, words * 3)));
+        const edited = await groqChatShort(env.GROQ_KEY, TLK_STYLE_AI[style], rawTxt, Math.min(4000, Math.max(400, words * 3)));
         if (edited) {
           const eWords = edited.split(/\s+/).length;
           if (Math.abs(eWords - words) <= Math.max(4, Math.ceil(words * 0.2))) final = edited;
