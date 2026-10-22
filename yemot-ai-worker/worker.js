@@ -74,7 +74,10 @@ function responsesOutputText(payload) {
 __name(responsesOutputText, "responsesOutputText");
 __name2(responsesOutputText, "responsesOutputText");
 function responsesUsedBrowserSearch(payload) {
-  return (Array.isArray(payload?.output) ? payload.output : []).some((item) => /(?:browser|web)_search/i.test(String(item?.type || "")));
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+  if (output.some((item) => /(?:browser|web)_search/i.test(String(item?.type || "")))) return true;
+  if (output.some((item) => String(item?.type || "") === "mcp_call")) return true;
+  return false;
 }
 __name(responsesUsedBrowserSearch, "responsesUsedBrowserSearch");
 __name2(responsesUsedBrowserSearch, "responsesUsedBrowserSearch");
@@ -960,7 +963,8 @@ var worker_default = {
         return speak(capsA, 1600);
       }
       const _weatherQ = /(?:מ[זס]ג\s*ה?\s*או\s*ו?ו?\s*י\s*ר|תח[זס]י[תהונ]|כמה מעלות|טמפרטורה|מ[זס]ג\s*ה?אויר)/.test(transcribedText);
-      if (_weatherQ && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
+      const webExplicit = /(?:חפש|תחפש|תבדוק|בדוק).{0,24}(?:אינטרנט|רשת|גוגל)|(?:אינטרנט|רשת|גוגל).{0,24}(?:חפש|תחפש|תבדוק|בדוק)/.test(transcribedText);
+      if (_weatherQ && !webExplicit && !/(?:דולר|אירו|מטבע|ביטק|תזכורת|תזכיר)/.test(transcribedText)) {
         try {
           const _WCITIES = {"צפון":[32.85,35.3],"דרום":[31.05,34.85],"מרכז":[32.05,34.85],"שפלה":[31.85,34.85],"ירקון":[32.1,34.92],"שרון":[32.35,34.95],"גוש דן":[32.05,34.82],"נגב":[31.0,34.9],"גליל":[33.0,35.4],"עמק יזרעאל":[32.6,35.25],"כרמל":[32.75,35.0],"שומרון":[32.2,35.2],"יהודה":[31.7,35.1],"בקעה":[31.4,35.3],"ערבה":[30.5,35.0],"גלבוע":[32.5,35.4],"חוף":[32.1,34.8],"קָצִיר":[32.705,35.618],"תל קציר":[32.705,35.618],"עין קיניא":[33.238,35.731],"עין קניה":[33.238,35.731],"אֵילִיָּה קַפִּיטוֹלִינָה":[31.769,35.216],"הַקֹּדֶשׁ":[31.769,35.216],"יְבוּס":[31.769,35.216],"יְרוּשְׁלֶם":[31.769,35.216],"יְרוּשָׁלַיִם":[31.769,35.216],"יְרוּשָׁלַםִ":[31.769,35.216],"יְרוּשָׁלָםִ":[31.769,35.216],"יבוס":[31.769,35.216],"ירושלים":[31.769,35.216],"ירושלם":[31.769,35.216],"מוֹרִיָּה":[31.769,35.216],"מוריה":[31.769,35.216],"צִיּוֹן":[31.769,35.216],"ציון":[31.769,35.216],"שָׁלֵם":[31.769,35.216],"שלם":[31.769,35.216],"אבו תור":[31.767,35.233],"גבעת חנניה":[31.767,35.233],"הר אדר":[31.828,35.131],"תְּקוֹעַ":[31.654,35.228],"תקוע":[31.654,35.228],"מִצְפֵּה יְרִיחוֹ":[31.817,35.394],"מצפה יריחו":[31.817,35.394],"מודיעין":[31.894,35.015],"מודיעין מכבים רעות":[31.894,35.015],"מכבים רעות":[31.894,35.015],"רעות":[31.894,35.015],"כּוֹכַב הַשַּׁחַר":[31.96,35.349],"כוכב השחר":[31.96,35.349],"אלעזר":[31.66,35.143],"צור משה":[32.298,34.912],"צור הדסה":[31.719,35.097],"זִכְרוֹן יַעֲקֹב":[32.569,34.954],"זיכרון יעקב":[32.569,34.954],"זכרון יעקב":[32.569,34.954],"צפת":[32.965,35.496],"זלפה":[32.551,35.187],"יָקְנְעָם עילית":[32.647,35.092],"יוקנעם עילית":[32.647,35.092],"יקנעם עלית":[32.647,35.092],"יִרְכָּא":[32.954,35.212],"ירכא":[32.954,35.212],"יְסוּד הַמַּעֲלָ":[33.059,35.608],"יְסוּד הַמַּעֲלָה":[33.059,35.608],"יסוד המעלה":[33.059,35.608],"ירוחם":[30.988,34.932],"ירחם":[30.988,34.932],"יהוד":[32.033,34.891],"בית גן":[32.706,35.504],"יבנאל":[32.706,35.504],"משמר השלושה":[32.706,35.504],"יבנה":[31.878,34.74],"יגור":[32.743,35.078],"יפו":[32.05,34.752],"יפא":[32.689,35.278],"יפיע":[32.689,35.278],"יַד בִּנְיָמִין":[31.797,34.821],"יד בנימין":[31.797,34.821],"מרכז חנוכי":[31.797,34.821],"עֻזֵיר":[32.791,35.325],"עוזייר":[32.791,35.325],"עזיר":[32.791,35.325],"אם אל פחם":[32.518,35.154],"טובא זנגריה":[32.966,35.593],"טירת כרמל":[32.76,34.969],"תִּפְרַח":[31.327,34.677],"תפרח":[31.327,34.677],"טבריה":[32.794,35.532],"תל מונד":[32.253,34.918],"תל אביב":[32.081,34.781],"תֵּל עֲדָשִׁים":[32.657,35.302],"תל עדשים":[32.657,35.302],"מעלות תרשיחא":[33.017,35.267],"טמרה":[32.853,35.199],"תמרה":[32.853,35.199],"סולם":[32.606,35.334],"שונם":[32.606,35.334],"ביתניה הדרומית":[31.774,34.684],"שְׁתוּלִים":[31.774,34.684],"שתולים":[31.774,34.684],"שלומי":[33.072,35.145],"שְׁפַרְעָם":[32.806,35.169],"שפרעם":[32.806,35.169],"בית יצחק שער חפר":[32.334,34.89],"שַׁעַר אֶפְרַיִם":[32.29,34.997],"שער אפרים":[32.29,34.997],"שַׁעַלְבִים":[31.87,34.987],"שעלבים":[31.87,34.987],"שַׁעַבּ":[32.89,35.239],"שאב":[32.89,35.239],"שעב":[32.89,35.239],"שְׂדֵה עוֹזִיָּהוּ":[31.757,34.679],"שדה עוזיהו":[31.757,34.679],"שדרות":[31.525,34.597],"סַבְיוֹן":[32.05,34.878],"סביון":[32.05,34.878],"סַנְדַלָה":[32.522,35.324],"צַנְדַלָה":[32.522,35.324],"צנדלה":[32.522,35.324],"סִכְנִין":[32.865,35.298],"סכנין":[32.865,35.298],"ראש פינה":[32.969,35.542],"ראש פנה":[32.969,35.542],"ראש העין":[32.095,34.954],"ראשון לציון":[31.971,34.789],"רכסים":[32.75,35.101],"רחובות":[31.894,34.812],"רמלה":[31.926,34.864],"רמת ישי":[32.701,35.164],"רמת השרון":[32.146,34.839],"רמת גן":[32.082,34.811],"רָמָה":[32.939,35.366],"ראמה":[32.939,35.366],"רמה":[32.939,35.366],"רעננה":[32.184,34.874],"כפר הנוער קרית יערים":[31.803,35.102],"קִרְיַת יְעָרִים":[31.803,35.102],"קרית יערים":[31.803,35.102],"קריית ים":[32.85,35.07],"קרית ים":[32.85,35.07],"קרית ימ":[32.85,35.07],"קִרְיַת טִבְעוֹן":[32.712,35.125],"קריית טבעון":[32.712,35.125],"קרית טבעון":[32.712,35.125],"קריית שמונה":[33.212,35.57],"קרית שמונה":[33.212,35.57],"קריית מוצקין":[32.837,35.078],"קרית מוצקון":[32.837,35.078],"קִרְיַת מַלְאָכִי":[31.729,34.746],"קריית מלאכי":[31.729,34.746],"קרית מלאכי":[31.729,34.746],"קריית גת":[31.61,34.764],"קרית גת":[31.61,34.764],"קריית ביאליק":[32.828,35.086],"קרית ביאליק":[32.828,35.086],"קריית אתא":[32.811,35.113],"קרית אתא":[32.811,35.113],"קִדְרוֹן":[31.814,34.797],"קדרון":[31.814,34.797],"קלנסוה":[32.285,34.981],"קלנסווה":[32.285,34.981],"פתח תיקוה":[32.089,34.887],"פתח תיקווה":[32.089,34.887],"פתח תקוה":[32.089,34.887],"פתח תקווה":[32.089,34.887],"פרדסיה":[32.307,34.911],"פרדסייה":[32.307,34.911],"פרדס חנה כרכור":[32.474,34.978],"אור יהודה":[32.029,34.858],"אור עקיבא":[32.506,34.921],"עֹמֶר":[31.265,34.848],"עומר":[31.265,34.848],"עמר":[31.265,34.848],"אופקים":[31.314,34.62],"אפקים":[31.314,34.62],"נוֹרְדִיָּה":[32.314,34.896],"נורדיה":[32.314,34.896],"נורדייה":[32.314,34.896],"נתיבות":[31.423,34.589],"נתניה":[32.333,34.859],"נס ציונה":[31.929,34.799],"נשר":[32.766,35.044],"ניין":[32.63,35.349],"נין":[32.63,35.349],"נעים":[32.63,35.349],"נחלים":[32.06,34.911],"נוֹף הַגָּלִיל":[32.708,35.325],"נוף הגליל":[32.708,35.325],"נצרת עלית":[32.708,35.325],"נצרת":[32.701,35.297],"נָעוּרָה":[32.614,35.392],"נעורה":[32.614,35.392],"נחף":[32.933,35.318],"נהריה":[33.009,35.098],"נַעַן":[31.883,34.858],"נען":[31.883,34.858],"מוסמוס":[32.545,35.155],"מצמץ":[32.545,35.155],"מֻקֵיבִּלָה":[32.514,35.296],"מקיבלה":[32.514,35.296],"מצפה רמון":[30.609,34.801],"מיעיליא":[33.028,35.256],"מעיליא":[33.028,35.256],"מעליא":[33.028,35.256],"מגדל העמק":[32.678,35.242],"מִגְדָּל":[32.839,35.502],"מגדל":[32.839,35.502],"מבשרת ציון":[31.802,35.151],"מטלה":[33.279,35.579],"מזכרת בתיה":[31.854,34.846],"בית כרם":[32.921,35.254],"מראר":[32.889,35.408],"מַעְגָלִים":[31.397,34.599],"מעגלים":[31.397,34.599],"מַעֲגַן מִיכָאֵל":[32.555,34.916],"מעגן מיכאל":[32.555,34.916],"לד":[31.947,34.89],"לוד":[31.947,34.89],"חרבת מיסר":[32.445,35.042],"מֵיסִר":[32.445,35.042],"מיסר":[32.445,35.042],"כפר יונה":[32.315,34.936],"כְּפַר וִיתְקִין":[32.38,34.875],"כפר ויתקין":[32.38,34.875],"כפר תבור":[32.688,35.42],"כְּפַר סִירְקִין":[32.077,34.925],"כפר סירקין":[32.077,34.925],"כפר שמריהו":[32.185,34.821],"כפר סבא":[32.175,34.907],"כְּפַר הֶס":[32.247,34.936],"כפר הס":[32.247,34.936],"דחן":[31.739,34.63],"כפר הנוער ניצנים":[31.739,34.63],"ניצן":[31.739,34.63],"נצן":[31.739,34.63],"כְּפַר חַבָּד":[31.988,34.852],"קִרְיַת עֶקְרוֹן":[31.861,34.823],"קרית עקרון":[31.861,34.823],"כרמיאל":[32.91,35.298],"כַּפְר יָסִיף":[32.955,35.162],"כפר יסיף":[32.955,35.162],"כַּפְר קָאסִם":[32.114,34.976],"כפר קסם":[32.114,34.976],"כַּפְר קַרִע":[32.505,35.052],"כפר קרע":[32.505,35.052],"כפר מצר":[32.645,35.421],"כפר מנדא":[32.811,35.261],"כפר כנא":[32.747,35.342],"כפר כמא":[32.722,35.44],"כַּפְר בַּרָא":[32.131,34.971],"כפר ברא":[32.131,34.971],"כאבול":[32.869,35.212],"כבול":[32.869,35.212],"גּוּשׁ חָלָב":[33.022,35.447],"גוש חלב":[33.022,35.447],"תל גת":[32.398,35.038],"גַ׳לְג׳וּלְיָה":[32.152,34.955],"גלגל":[32.152,34.955],"חוסיפה":[32.718,35.065],"עספיא":[32.718,35.065],"עִלּוּט":[32.718,35.26],"עילוט":[32.718,35.26],"עלוט":[32.718,35.26],"אכסל":[32.682,35.324],"כסלות תבור":[32.682,35.324],"אבטין":[32.761,35.114],"אבלים":[32.822,35.193],"אעבלין":[32.822,35.193],"חורפיש":[33.018,35.348],"חרפיש":[33.018,35.348],"חולון":[32.01,34.779],"הוד השרון":[32.159,34.893],"חוד השרון":[32.159,34.893],"הרצליה":[32.166,34.825],"הרצלייה":[32.166,34.825],"חיפה":[32.813,34.999],"חפה":[32.813,34.999],"חצור הגלילית":[32.982,35.545],"חדרה":[32.442,34.904],"גבעת שמואל":[32.078,34.849],"גיבעת שמואל":[32.078,34.849],"גִּבְעַת בְּרֶנֶר":[31.867,34.801],"גבעת ברנר":[31.867,34.801],"גבעתיים":[32.072,34.813],"גבעתים":[32.072,34.813],"גיבעתיים":[32.072,34.813],"גֶּשֶׁר הַזִּיו":[33.04,35.112],"גשר הזיו":[33.04,35.112],"גדרה":[31.815,34.78],"גן יבנה":[31.787,34.707],"גני תיקווה":[32.06,34.873],"גני תקוה":[32.06,34.873],"גני תקווה":[32.06,34.873],"מפשטה":[33.049,35.309],"פַסּוּטָה":[33.049,35.309],"פסוטה":[33.049,35.309],"אבן יהודה":[32.272,34.886],"אבן שמואל":[31.576,34.763],"א טירה":[32.234,34.95],"טירה":[32.234,34.95],"א טיבה":[32.266,35.009],"טַּיִּבָּה":[32.604,35.444],"טיבה":[32.604,35.444],"א רינה":[32.722,35.316],"ריינה":[32.722,35.316],"עֵין וֶרֶד":[32.267,34.933],"עין ורד":[32.267,34.933],"עֵין שָׂרִיד":[32.274,34.934],"עין שריד":[32.274,34.934],"אליכין":[32.408,34.925],"אל מזרעה":[32.983,35.098],"מזרעה":[32.983,35.098],"אל פרידיס":[32.597,34.953],"פֻרֵידִיס":[32.597,34.953],"פארדיס":[32.597,34.953],"פורידיס":[32.597,34.953],"אילת":[29.558,34.948],"עֵין מָהִל":[32.723,35.353],"עין מאהל":[32.723,35.353],"עין מהל":[32.723,35.353],"עֵילַבּוּ":[32.837,35.401],"עַילַבּוּן":[32.837,35.401],"עילבון":[32.837,35.401],"דימונה":[31.071,35.033],"דֵיר חַנָּא":[32.862,35.364],"דיר חנא":[32.862,35.364],"דליית אל כרמל":[32.694,35.047],"דלית אל כרמל":[32.694,35.047],"עיר הכרמל":[32.694,35.047],"דבוריה":[32.693,35.371],"בקיעה":[32.978,35.334],"פְּקִיעִין":[32.978,35.334],"פקיעין":[32.978,35.334],"בועינה":[32.806,35.364],"בעינה":[32.806,35.364],"ביר אל מכסור":[32.777,35.221],"בנימינה":[32.523,34.945],"בענה":[32.93,35.271],"בית זית":[31.782,35.162],"בית יצחק":[32.328,34.891],"בית שמש":[31.731,34.993],"בית שאן":[32.497,35.496],"בית אלעזרי":[31.844,34.804],"בית דגן":[32.002,34.83],"בת דגן":[32.002,34.83],"בני ברק":[32.081,34.834],"בני עיש":[31.79,34.759],"בני עייש":[31.79,34.759],"באר יעקב":[31.939,34.837],"באר שבע":[31.252,34.791],"בת ים":[32.024,34.752],"בסמת טבעון":[32.739,35.157],"בַּרֶקֶת":[32.018,34.944],"ברקת":[32.018,34.944],"אזור":[32.024,34.806],"עתלית":[32.689,34.942],"אשקלון":[31.669,34.571],"אשדוד":[31.792,34.65],"עַרְעָרָה":[32.496,35.093],"ערערה":[32.496,35.093],"עֲרָד":[31.259,35.213],"ערד":[31.259,35.213],"עכו":[32.928,35.076],"אחיעזר":[31.981,34.872],"עפולה":[32.609,35.289],"אֲפִיקִים":[32.681,35.577],"אפיקים":[32.681,35.577],"אַבּוּ סְנָן":[32.959,35.172],"אבו סנן":[32.959,35.172],"אבו גוש":[31.806,35.109],"שבלי":[32.694,35.392],"שיבלי":[32.694,35.392],"הושעיה":[32.759,35.294],"רומת היב":[32.777,35.305],"סלאמה":[32.893,35.371],"סלמה":[32.893,35.371],"כפר ורדים":[32.994,35.278],"בית השמונאי":[31.89,34.917],"בית חשמונאי":[31.89,34.917],"חספין":[32.845,35.793],"קַצְרִין":[32.992,35.691],"קצרין":[32.992,35.691],"להבים":[31.373,34.816],"מדרשת בן גוריון":[30.852,34.783],"קיסריה":[32.519,34.905],"מערב ירושלים":[31.782,35.22],"מֵיתָר":[31.327,34.939],"מיתר":[31.327,34.939],"עראמשה":[33.087,35.227],"ערמשה":[33.087,35.227],"מֶרְכַּז שַׁפִּירָא":[31.699,34.709],"מרכז שפירא":[31.699,34.709],"אחוזת ברק":[32.643,35.338],"אחזת ברק":[32.643,35.338],"גִּבְעַת אַבְנִי":[32.775,35.438],"גבעת אבני":[32.775,35.438],"כוכב יאיר":[32.226,35.001],"בַּת חֵפֶר":[32.334,35.013],"בת חפר":[32.334,35.013],"חָרִישׁ":[32.462,35.046],"חריש":[32.462,35.046],"זמר":[32.365,35.038],"כַּרְמֵי יוֹסֵף":[31.848,34.92],"כרמי יוסף":[31.848,34.92],"עֵין נַקוּבָּא":[31.794,35.121],"עין נקובא":[31.794,35.121],"רהט":[31.395,34.757],"רהת":[31.395,34.757],"לָקִיָּה":[31.319,34.859],"לקיה":[31.319,34.859],"שֶׂגֶב שָׁלוֹם":[31.199,34.84],"שגב שלום":[31.199,34.84],"שקיב א סלם":[31.199,34.84],"מודיעין עילית":[31.932,35.044],"נוף איילון":[31.871,34.991],"חשמונאים":[31.93,35.022],"לפיד":[31.918,35.032],"כְּפָר הָאֳרָנִים":[31.92,35.037],"כפר האורנים":[31.92,35.037],"נִילִי":[31.964,35.049],"נילי":[31.964,35.049],"נַעֲלֶה":[31.962,35.066],"נעלה":[31.962,35.066],"טַלְמוֹן":[31.939,35.135],"טלמון":[31.939,35.135],"אריאל":[32.106,35.184],"רְבָבָה":[32.119,35.129],"רבבה":[32.119,35.129],"זרזיר":[32.728,35.214],"שִׁמְשִׁית":[32.733,35.247],"שימשית":[32.733,35.247],"שמשית":[32.733,35.247],"גִּבְעַת אֵלָה":[32.723,35.245],"גבעת אלה":[32.723,35.245],"נוֹפִית":[32.76,35.148],"נופית":[32.76,35.148],"פי נר":[32.76,35.148],"כעבייה":[32.75,35.184],"עֲדִי":[32.785,35.173],"עדי":[32.785,35.173],"תֵּל שֶׁבַע":[31.249,34.86],"תל א סבע":[31.249,34.86],"תל שבע":[31.249,34.86],"גַּן נֵר":[32.529,35.337],"גן נר":[32.529,35.337],"חרבת אבו תלול":[31.142,34.914],"עַרְעָרָה בַּנֶּגֶב":[31.16,35.023],"ערערה בנגב":[31.16,35.023],"חורה":[31.301,34.936],"כְּסֵיפָה":[31.245,35.093],"כסיפה":[31.245,35.093],"שהם":[31.999,34.946],"שוהם":[31.999,34.946],"אלעד":[32.051,34.957],"מתן":[32.159,34.975],"קדימה צורן":[32.278,34.919],"כסרא סומיע":[32.973,35.299],"מעלה עירון":[32.554,35.184],"צוּר יִצְחָק":[32.24,34.998],"צור יצחק":[32.24,34.998],"קִרְיַת אוֹנוֹ":[32.061,34.856],"קריית אונו":[32.061,34.856],"קרית אונו":[32.061,34.856],"אום בטין":[31.277,34.882],"אל סייד":[31.283,34.915],"בסמה":[32.529,35.101]};
           let _wCity = "\u05D9\u05E8\u05D5\u05E9\u05DC\u05D9\u05DD", _wLat = 31.78, _wLon = 35.22;
@@ -1259,14 +1263,14 @@ var worker_default = {
         }
       } catch (_) {
       }
-      const pairAns = await currencyTextAnswer(effectiveText);
+      const pairAns = webExplicit ? null : await currencyTextAnswer(effectiveText);
       if (pairAns) {
         logEvent("currency_pair_answered", { caller: callerTail(callerPhone) });
         await saveConvoTurn(env, transcribedText, pairAns);
         return speak(pairAns);
       }
-      const euroQ = asksEuroRate(effectiveText);
-      const currOnlyQ = /(?:\u05E9\u05D9?\u05E2\u05E8|\u05E1[\u05D9]?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2)/.test(effectiveText) && !asksDollarRate(effectiveText) && !euroQ;
+      const euroQ = !webExplicit && asksEuroRate(effectiveText);
+      const currOnlyQ = !webExplicit && /(?:\u05E9\u05D9?\u05E2\u05E8|\u05E1[\u05D9]?\u05E2\u05E8|\u05DE\u05D8\u05D1\u05E2)/.test(effectiveText) && !asksDollarRate(effectiveText) && !euroQ;
       if (currOnlyQ) {
         const parts = [];
         if (dollarRate && Number.isFinite(dollarRate.rate)) {
@@ -1295,7 +1299,7 @@ var worker_default = {
           return speak("\u05E9\u05E2\u05E8 \u05D4\u05D0\u05D9\u05E8\u05D5 \u05DE\u05D5\u05DC \u05D4\u05E9\u05E7\u05DC \u05D4\u05D5\u05D0 " + eShekels + " \u05E9\u05E7\u05DC\u05D9\u05DD \u05D5 " + eAgorot + " \u05D0\u05D2\u05D5\u05E8\u05D5\u05EA");
         }
       }
-      if (asksDollarRate(effectiveText) && dollarRate) {
+      if (!webExplicit && asksDollarRate(effectiveText) && dollarRate) {
         const shekels = Math.floor(dollarRate.rate);
         const agorot = Math.round((dollarRate.rate - shekels) * 100);
         const shekelWords = ["\u05D0\u05E4\u05E1", "\u05D0\u05D7\u05D3", "\u05E9\u05E0\u05D9\u05D9\u05DD", "\u05E9\u05DC\u05D5\u05E9\u05D4", "\u05D0\u05E8\u05D1\u05E2\u05D4", "\u05D7\u05DE\u05D9\u05E9\u05D4", "\u05E9\u05D9\u05E9\u05D4", "\u05E9\u05D1\u05E2\u05D4", "\u05E9\u05DE\u05D5\u05E0\u05D4", "\u05EA\u05E9\u05E2\u05D4"];
@@ -1304,10 +1308,18 @@ var worker_default = {
         logEvent("dollar_rate_answered", { source: "bank_of_israel" });
         return speak(`\u05D4\u05E9\u05E2\u05E8 \u05D4\u05D9\u05E6\u05D9\u05D2 \u05D4\u05D0\u05D7\u05E8\u05D5\u05DF \u05E9\u05E4\u05E8\u05E1\u05DD \u05D1\u05E0\u05E7 \u05D9\u05E9\u05E8\u05D0\u05DC \u05D4\u05D5\u05D0 ${amount} \u05DC\u05D3\u05D5\u05DC\u05E8`);
       }
-      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9, \u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD, \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4, \u05D1\u05DC\u05D9 \u05D0\u05E0\u05D2\u05DC\u05D9\u05EA. \u05D9\u05DB\u05D5\u05DC\u05D5\u05EA \u05D4\u05DE\u05E2\u05E8\u05DB\u05EA: \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D9\u05E8\u05D5 \u05D5\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF, \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8, \u05D4\u05D2\u05D3\u05E8\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA \u05D5\u05E9\u05D0\u05DC\u05D5\u05EA \u05DB\u05DC\u05DC\u05D9\u05D5\u05EA. \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05E9\u05D0\u05D9\u05E0\u05DA \u05D9\u05DB\u05D5\u05DC \u05DC\u05D2\u05E9\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05DC\u05E6\u05D0\u05D8\u05D9\u05DD, \u05D6\u05D4 \u05E7\u05D9\u05D9\u05DD \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA. \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA \u05E0\u05E9\u05DE\u05E8\u05D5\u05EA \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DB\u05E9\u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05D5\u05DC\u05DC\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05D0\u05D5 \u05EA\u05D6\u05DB\u05D9\u05E8 - \u05D0\u05DD \u05D4\u05D1\u05E7\u05E9\u05D4 \u05D4\u05D2\u05D9\u05E2\u05D4 \u05D0\u05DC\u05D9\u05DA \u05E1\u05D9\u05DE\u05DF \u05E9\u05DC\u05D0 \u05E0\u05E9\u05DE\u05E8\u05D4, \u05D1\u05E7\u05E9 \u05DE\u05D4\u05DE\u05E9\u05EA\u05DE\u05E9 \u05DC\u05D5\u05DE\u05E8 \u05EA\u05D6\u05DB\u05D9\u05E8 \u05DC\u05D9 \u05D5\u05D0\u05D6 \u05D0\u05EA \u05D4\u05E9\u05E2\u05D4. \u05D0\u05DD \u05D4\u05DE\u05E9\u05E4\u05D8 \u05DE\u05D1\u05D5\u05DC\u05D1\u05DC, \u05D7\u05E1\u05E8 \u05DE\u05D9\u05D3\u05E2 \u05D0\u05D5 \u05E0\u05E9\u05DE\u05E2 \u05DB\u05DE\u05D5 \u05D8\u05E2\u05D5\u05EA \u05EA\u05DE\u05DC\u05D5\u05DC \u05DE\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05E0\u05D9, \u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05EA\u05E9\u05D5\u05D1\u05D4, \u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05E9\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA \u05D5\u05D1\u05E7\u05E9 \u05E9\u05D9\u05D7\u05D6\u05D5\u05E8 \u05E2\u05DC \u05D4\u05D1\u05E7\u05E9\u05D4. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA.
+      const systemPrompt = `\u05D0\u05EA\u05D4 \u05E2\u05D5\u05D6\u05E8 \u05E7\u05D5\u05DC\u05D9 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05E2\u05D5\u05E0\u05D4 \u05E7\u05E6\u05E8, \u05D1\u05E8\u05D5\u05E8 \u05D5\u05EA\u05DE\u05E6\u05D9\u05EA\u05D9, \u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD 3 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD, \u05EA\u05DE\u05D9\u05D3 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E4\u05E9\u05D5\u05D8\u05D4, \u05D1\u05DC\u05D9 \u05D0\u05E0\u05D2\u05DC\u05D9\u05EA. \u05D9\u05DB\u05D5\u05DC\u05D5\u05EA \u05D4\u05DE\u05E2\u05E8\u05DB\u05EA: \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05D3\u05D5\u05DC\u05E8 \u05D0\u05D9\u05E8\u05D5 \u05D5\u05D1\u05D9\u05D8\u05E7\u05D5\u05D9\u05DF, \u05E7\u05E8\u05D9\u05D0\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8, \u05D4\u05D2\u05D3\u05E8\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05DC\u05D9\u05D7\u05EA \u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D5\u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA \u05D5\u05E9\u05D0\u05DC\u05D5\u05EA \u05DB\u05DC\u05DC\u05D9\u05D5\u05EA. \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05E9\u05D0\u05D9\u05E0\u05DA \u05D9\u05DB\u05D5\u05DC \u05DC\u05D2\u05E9\u05EA \u05DC\u05DE\u05D9\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05DC\u05E6\u05D0\u05D8\u05D9\u05DD, \u05D6\u05D4 \u05E7\u05D9\u05D9\u05DD \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA. \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA \u05E0\u05E9\u05DE\u05E8\u05D5\u05EA \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DB\u05E9\u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05D5\u05DC\u05DC\u05EA \u05EA\u05D6\u05DB\u05D5\u05E8\u05EA \u05D0\u05D5 \u05EA\u05D6\u05DB\u05D9\u05E8 - \u05D0\u05DD \u05D4\u05D1\u05E7\u05E9\u05D4 \u05D4\u05D2\u05D9\u05E2\u05D4 \u05D0\u05DC\u05D9\u05DA \u05E1\u05D9\u05DE\u05DF \u05E9\u05DC\u05D0 \u05E0\u05E9\u05DE\u05E8\u05D4, \u05D1\u05E7\u05E9 \u05DE\u05D4\u05DE\u05E9\u05EA\u05DE\u05E9 \u05DC\u05D5\u05DE\u05E8 \u05EA\u05D6\u05DB\u05D9\u05E8 \u05DC\u05D9 \u05D5\u05D0\u05D6 \u05D0\u05EA \u05D4\u05E9\u05E2\u05D4. \u05D0\u05DD \u05D4\u05DE\u05E9\u05E4\u05D8 \u05DE\u05D1\u05D5\u05DC\u05D1\u05DC, \u05D7\u05E1\u05E8 \u05DE\u05D9\u05D3\u05E2 \u05D0\u05D5 \u05E0\u05E9\u05DE\u05E2 \u05DB\u05DE\u05D5 \u05D8\u05E2\u05D5\u05EA \u05EA\u05DE\u05DC\u05D5\u05DC \u05DE\u05E7\u05D5 \u05D8\u05DC\u05E4\u05D5\u05E0\u05D9, \u05D0\u05DC \u05EA\u05DE\u05E6\u05D9\u05D0 \u05EA\u05E9\u05D5\u05D1\u05D4, \u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05E9\u05DC\u05D0 \u05D4\u05D1\u05E0\u05EA \u05D5\u05D1\u05E7\u05E9 \u05E9\u05D9\u05D7\u05D6\u05D5\u05E8 \u05E2\u05DC \u05D4\u05D1\u05E7\u05E9\u05D4. \u05D0\u05DD \u05D0\u05D9\u05DF \u05DC\u05DA \u05DE\u05D9\u05D3\u05E2 \u05D0\u05DE\u05D9\u05DF \u05DC\u05EA\u05E9\u05D5\u05D1\u05D4, \u05D0\u05DC \u05EA\u05D2\u05D9\u05D3 \u05D0\u05E0\u05D9 \u05DC\u05D0 \u05D9\u05D5\u05D3\u05E2 \u05D1\u05E6\u05D5\u05E8\u05D4 \u05D9\u05D1\u05E9\u05D4. \u05D0\u05DE\u05D5\u05E8 \u05D1\u05D8\u05D1\u05E2\u05D9\u05D5\u05EA \u05E9\u05D1\u05D3\u05E7\u05EA \u05D5\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA \u05DC\u05D0\u05DE\u05EA \u05D0\u05EA \u05D6\u05D4, \u05D5\u05D4\u05E6\u05E2 \u05DC\u05E0\u05E1\u05D7 \u05D0\u05EA \u05D6\u05D4 \u05D0\u05D7\u05E8\u05EA. \u05D0\u05DC \u05EA\u05E1\u05D1\u05D9\u05E8 \u05DE\u05D4 \u05D0\u05EA\u05D4 \u05E2\u05D5\u05E9\u05D4, \u05E8\u05E7 \u05E2\u05E0\u05D4. \u05D0\u05DD \u05E9\u05D5\u05D0\u05DC\u05D9\u05DD \u05DE\u05D9 \u05D0\u05EA\u05D4, \u05E2\u05E0\u05D4: \u05D0\u05E0\u05D9 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD \u05E9\u05DC\u05DA.
 \u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 ${currentTimeIsrael}, \u05D4\u05EA\u05D0\u05E8\u05D9\u05DA ${currentDateIsrael}${hebrewDateStr ? ", " + hebrewDateStr : ""}${parashaStr ? ", " + parashaStr : ""}${usdRateStr ? ". \u05E9\u05E2\u05E8\u05D9 \u05D7\u05DC\u05D9\u05E4\u05D9\u05DF: " + usdRateStr : ""}${weatherStr ? ", " + weatherStr : ""}${btcStr ? ", " + btcStr : ""}${callerName ? ". \u05D4\u05DE\u05EA\u05E7\u05E9\u05E8 \u05E0\u05E7\u05E8\u05D0 " + callerName : ""}${liveContext ? ". \u05DE\u05D9\u05D3\u05E2 \u05E0\u05D5\u05E1\u05E3: " + liveContext : ""}`;
       const convoCtx = convo && convo.lastUser ? "\u05D1\u05D4\u05DE\u05E9\u05DA \u05DC\u05E9\u05D9\u05D7\u05EA\u05E0\u05D5: \u05E9\u05D0\u05DC\u05EA\u05D9 \u05E7\u05D5\u05D3\u05DD: " + String(convo.lastUser).slice(0, 150) + ", \u05D5\u05E2\u05E0\u05D9\u05EA \u05DC\u05D9: " + String(convo.lastAnswer || "").slice(0, 150) + ". \u05D4\u05D4\u05E9\u05DC\u05D4 \u05D4\u05E0\u05D5\u05DB\u05D7\u05D9\u05EA \u05DE\u05EA\u05D9\u05D7\u05E1\u05EA \u05D0\u05DC\u05D9\u05D4. " : "";
       const useWebSearch = needsWebSearch(effectiveText);
+      let webQuery = effectiveText;
+      if (useWebSearch) {
+        try {
+          const cq = await groqChatShort(GROQ_KEY, "אתה מקשיב לבקשה משובשת מטלפון בעברית. תקן שיבושי תמלול ונסח את הבקשה בבהירות. החזר רק את הבקשה המתוקנת בלי הסבר. אם היא כבר ברורה, החזר אותה כמו שהיא.", effectiveText, 150);
+          if (cq && cq.length >= 4 && cq.length <= 200) webQuery = cq;
+        } catch (_) {
+        }
+      }
       let chatRes = null;
       let aiAnswer = "";
       let webVerified = !useWebSearch;
@@ -1320,7 +1332,7 @@ var worker_default = {
               model: "openai/gpt-oss-20b",
               instructions: `${systemPrompt}
 \u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05DC\u05E4\u05E0\u05D9 \u05D4\u05EA\u05E9\u05D5\u05D1\u05D4. \u05E2\u05E0\u05D4 \u05E8\u05E7 \u05DC\u05E4\u05D9 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA \u05E9\u05DE\u05E6\u05D0\u05EA; \u05D0\u05DD \u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D5 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05E9\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9.`,
-              input: convoCtx + effectiveText,
+              input: convoCtx + webQuery,
               tools: [{ type: "browser_search" }],
               tool_choice: "required",
               max_output_tokens: 300
@@ -2022,7 +2034,14 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
           await setContState(env, callerPhone, { kind: "chatdraft", payload: { to: ag, toName: "", account: pl.account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
           return openQuestion("מה לכתוב בהודעה?");
         }
-        return speak("לא מצאתי את הנמען, אמור שם איש קשר שמור או כתובת מלאה ונסה שוב");
+        const deepC = await deepContactLookup(env, env.GROQ_KEY, callerPhone, ans, ans);
+        if (deepC.found) {
+          logEvent("deep_contact_found", { flow: "chatdraft", variant: (deepC.variant || "").slice(0, 40) });
+          await setContState(env, callerPhone, { kind: "chatdraft", payload: { to: deepC.address, toName: deepC.name, account: pl.account || 1 }, question: "מה לכתוב בהודעה?", ts: Date.now() });
+          return openQuestion("אם התכוונת ל" + deepC.name + ", מה לכתוב בהודעה?");
+        }
+        logEvent("deep_contact_miss", { flow: "chatdraft" });
+        return speak(await naturalMiss(env.GROQ_KEY, "contact", ans, [ans, ...(deepC.tried || [])]) + " אפשר גם להכתיב כתובת מלאה עם שטרודל");
       }
       logEvent("cont_draft_done", { channel: "chat" });
       return await chatSendConfirm(env, callerPhone, pl.to, pl.toName || "", ans, "", pl.account || 1);
@@ -2051,7 +2070,17 @@ async function executeContinuation(env, cont, res, callerPhone, requestId) {
           } else {
             const ag = normalizeAddress(ans);
             if (ag.includes("@") && (ag.split("@")[1] || "").includes(".")) to = ag;
-            else return speak("לא מצאתי את הנמען, אמור שם איש קשר שמור או כתובת מלאה עם שטרודל ונקודה, ונסה שוב");
+            else {
+              const deep = await deepContactLookup(env, env.GROQ_KEY, callerPhone, ans, ans);
+              if (deep.found) {
+                to = deep.address;
+                toName = deep.name;
+                logEvent("deep_contact_found", { flow: "maildraft", variant: (deep.variant || "").slice(0, 40) });
+              } else {
+                logEvent("deep_contact_miss", { flow: "maildraft" });
+                return speak(await naturalMiss(env.GROQ_KEY, "contact", ans, [ans, ...(deep.tried || [])]) + " אפשר גם להכתיב כתובת מלאה עם שטרודל");
+              }
+            }
           }
         }
         logEvent("cont_draft_recipient", { channel: "email" });
@@ -2229,6 +2258,26 @@ function findFuzzyContact(contacts, requestedName) {
 __name(findFuzzyContact, "findFuzzyContact");
 __name2(findFuzzyContact, "findFuzzyContact");
 __name22(findFuzzyContact, "findFuzzyContact");
+function findStrictContact(contacts, requestedName, minScore) {
+  const wanted = normalizeContactTerm(requestedName);
+  if (!wanted || wanted.length < 3) return null;
+  let best = null, bestScore = 0;
+  for (const contact of contacts || []) {
+    const candidates = [contact.name, ...(contact.aliases || []), String(contact.address || "").split("@")[0]];
+    for (const cand of candidates) {
+      const c = normalizeContactTerm(cand);
+      if (!c) continue;
+      let score = 1 - levenshteinDistance(wanted, c) / Math.max(wanted.length, c.length, 1);
+      if (c.includes(wanted) && wanted.length >= 4) score = Math.max(score, 0.9);
+      if (wanted.includes(c) && c.length >= 4) score = Math.max(score, 0.85);
+      if (score > bestScore) { bestScore = score; best = contact; }
+    }
+  }
+  return bestScore >= (minScore || 0.8) ? best : null;
+}
+__name(findStrictContact, "findStrictContact");
+__name2(findStrictContact, "findStrictContact");
+__name22(findStrictContact, "findStrictContact");
 function speakAddress(addr) {
   return String(addr || "").replace(/@/g, " \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC ").replace(/\./g, " \u05E0\u05E7\u05D5\u05D3\u05D4 ");
 }
@@ -2308,6 +2357,45 @@ async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
 __name(groqChatShort, "groqChatShort");
 __name2(groqChatShort, "groqChatShort");
 __name22(groqChatShort, "groqChatShort");
+async function deepThinkVariants(GROQ_KEY, userText, contextDesc, triedQuery) {
+  const p = "אתה מנתח בקשות משובשות מטלפון בעברית. המשתמש אמר: \"" + String(userText || "").slice(0, 200) + "\". ניסינו " + String(contextDesc || "חיפוש") + " עם \"" + String(triedQuery || "").slice(0, 80) + "\" ולא נמצא כלום. תן עד 3 פרשנויות חלופיות למה המשתמש התכוון בפועל: תיקון שיבוש תמלול, שם קרוב, כינוי או איות אחר. החזר רק את הפרשנויות מופרדות בפסיקים, בלי מספור ובלי הסברים.";
+  try {
+    const raw = await groqChatShort(GROQ_KEY, p, "הפרשנויות:", 120);
+    return raw.split(/[,;\n]/).map((x) => x.replace(/^[\s"']+|[\s"']+$/g, "")).filter((x) => x && x.length > 1).slice(0, 3);
+  } catch (_) {
+    return [];
+  }
+}
+__name(deepThinkVariants, "deepThinkVariants");
+__name2(deepThinkVariants, "deepThinkVariants");
+__name22(deepThinkVariants, "deepThinkVariants");
+async function naturalMiss(GROQ_KEY, kind, userText, triedList) {
+  const p = "אתה עוזר קולי בטלפון בעברית. המשתמש ביקש: \"" + String(userText || "").slice(0, 150) + "\". בדקת " + (kind === "mail" ? "מיילים" : kind === "chat" ? "הודעות צאט" : "אנשי קשר") + " גם עם הניסוחים: " + (triedList || []).slice(0, 4).join(", ") + ", ולא מצאת שום דבר מתאים. אמור למשתמש בטבעיות ובקצרה, במילים שלך, שבדקת עוד כמה אפשרויות ולא מצאת, ובקש ממנו לנסח את זה אחרת. אל תמציא תוצאות, אל תשתמש בנקודות או במקפים, החזר רק את ההודעה.";
+  try {
+    const ans = await groqChatShort(GROQ_KEY, p, "כתוב את ההודעה", 120);
+    if (ans && ans.length > 5) return ans.replace(/[.־]/g, " ").trim();
+  } catch (_) {
+  }
+  return "בדקתי גם כמה ניסוחים נוספים ולא מצאתי, תוכל לנסח את זה אחרת?";
+}
+__name(naturalMiss, "naturalMiss");
+__name2(naturalMiss, "naturalMiss");
+__name22(naturalMiss, "naturalMiss");
+async function deepContactLookup(env, GROQ_KEY, callerPhone, name, userText) {
+  const contacts = await getContacts(env, callerPhone);
+  const variants = await deepThinkVariants(GROQ_KEY, userText || name, "מציאת איש קשר לפי השם " + String(name || "").slice(0, 40), name);
+  for (const v of variants) {
+    if (!v || v === name) continue;
+    const m2 = findContactMatches(contacts, v);
+    if (m2 && m2.length === 1) return { found: true, address: m2[0].address, name: m2[0].name, variant: v, tried: variants };
+    const fz2 = findStrictContact(contacts, v, 0.8);
+    if (fz2) return { found: true, address: fz2.address, name: fz2.name, variant: v, tried: variants };
+  }
+  return { found: false, tried: variants };
+}
+__name(deepContactLookup, "deepContactLookup");
+__name2(deepContactLookup, "deepContactLookup");
+__name22(deepContactLookup, "deepContactLookup");
 function cleanFromName(from) {
   const s = String(from || "");
   const name = s.split("<")[0].replace(/["']/g, "").trim();
@@ -2563,7 +2651,24 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
         return speak(ans || fmtEmailList(msgs));
       }
       const _lbl = account === 2 ? "בחשבון השני, " : "";
-      if (!msgs.length && plan.action === "search") return speak("לא מצאתי מיילים לחיפוש הזה, אמור שם אחר או מילה מהנושא");
+      if (!msgs.length && plan.action === "search") {
+        const origQuery = String(p.query || "");
+        const variants = await deepThinkVariants(GROQ_KEY, transcribedText, "חיפוש מיילים", origQuery);
+        for (const v of variants) {
+          if (!v || v === origQuery) continue;
+          try {
+            const r2 = await callBridge(env, { action: "search", query: v, max: 5 }, account);
+            if (r2 && r2.ok && (r2.messages || []).length) {
+              await kvSetList(env, listKey, { messages: r2.messages, ts: Date.now(), account });
+              logEvent("deep_retry_found", { kind: "mail", variant: v.slice(0, 40) });
+              return speak("רגע, בדקתי עוד כמה אפשרויות ומצאתי. " + _lbl + fmtEmailList(r2.messages));
+            }
+          } catch (_) {
+          }
+        }
+        logEvent("deep_retry_miss", { kind: "mail", variants: (variants || []).join("|").slice(0, 80) });
+        return speak(await naturalMiss(GROQ_KEY, "mail", transcribedText, [origQuery, ...(variants || [])]));
+      }
       return speak(_lbl + fmtEmailList(msgs));
     }
     if (plan.action === "read") {
@@ -2621,7 +2726,16 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
               if (addrGuess.includes("@") && addrGuess.split("@")[1]?.includes(".")) {
                 to = addrGuess;
               } else {
-                return speak("\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D1\u05E9\u05DD \u05D6\u05D4. \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05DB\u05EA\u05D5\u05D1\u05EA \u05D4\u05DE\u05DC\u05D0\u05D4 \u05DB\u05D5\u05DC\u05DC \u05E9\u05D8\u05E8\u05D5\u05D3\u05DC, \u05D0\u05D5 \u05D0\u05DE\u05D5\u05E8 \u05D1\u05E6\u05D0\u05D8 \u05E9\u05DE\u05D5\u05E8 \u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8, \u05E9\u05DD \u05D5\u05DB\u05EA\u05D5\u05D1\u05EA");
+                const deep = await deepContactLookup(env, GROQ_KEY, callerPhone, rawTo, transcribedText);
+                if (deep.found) {
+                  to = deep.address;
+                  toName = deep.name;
+                  resolveNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + deep.name + "? ";
+                  logEvent("deep_contact_found", { flow: "email_send", variant: (deep.variant || "").slice(0, 40) });
+                } else {
+                  logEvent("deep_contact_miss", { flow: "email_send" });
+                  return speak(await naturalMiss(GROQ_KEY, "contact", transcribedText, [rawTo, ...(deep.tried || [])]));
+                }
               }
             }
           }
@@ -2709,6 +2823,24 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       }
       if (!data.ok) return speak("לא הצלחתי כרגע לקרוא את הודעות הצאט");
       await kvSetList(env, listKey, { messages: data.messages || [], ts: Date.now(), account });
+      if (plan.action === "search" && !(data.messages || []).length) {
+        const origQuery = String(params.query || "");
+        const variants = await deepThinkVariants(GROQ_KEY, transcribedText, "חיפוש הודעות צאט", origQuery);
+        for (const v of variants) {
+          if (!v || v === origQuery) continue;
+          try {
+            const r2 = await callBridge(env, { action: "chat_search", query: v, max: Math.min(parseInt(params.count) || 5, 10) }, account);
+            if (r2 && r2.ok && (r2.messages || []).length) {
+              await kvSetList(env, listKey, { messages: r2.messages, ts: Date.now(), account });
+              logEvent("deep_retry_found", { kind: "chat", variant: v.slice(0, 40) });
+              return speak("רגע, בדקתי עוד כמה אפשרויות ומצאתי. " + fmtChatList(r2.messages));
+            }
+          } catch (_) {
+          }
+        }
+        logEvent("deep_retry_miss", { kind: "chat", variants: (variants || []).join("|").slice(0, 80) });
+        return speak(await naturalMiss(GROQ_KEY, "chat", transcribedText, [origQuery, ...(variants || [])]));
+      }
       return speak(fmtChatList(data.messages || []));
     }
     if (plan.action === "read") {
@@ -2762,7 +2894,16 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
               if (addrGuess.includes("@") && addrGuess.split("@")[1]?.includes(".")) {
                 to = addrGuess;
               } else {
-                return speak("לא מצאתי איש קשר בשם הזה. אמור שוב את השם, או אמור את כתובת המייל שלו כולל שטרודל ונקודה");
+                const deep = await deepContactLookup(env, GROQ_KEY, callerPhone, rawTo, transcribedText);
+                if (deep.found) {
+                  to = deep.address;
+                  toName = deep.name;
+                  prefixNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + deep.name + "? ";
+                  logEvent("deep_contact_found", { flow: "chat_send", variant: (deep.variant || "").slice(0, 40) });
+                } else {
+                  logEvent("deep_contact_miss", { flow: "chat_send" });
+                  return speak(await naturalMiss(GROQ_KEY, "contact", transcribedText, [rawTo, ...(deep.tried || [])]));
+                }
               }
             }
           }
