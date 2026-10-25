@@ -1324,34 +1324,41 @@ var worker_default = {
       let aiAnswer = "";
       let webVerified = !useWebSearch;
       if (useWebSearch) {
-        try {
-          const response = await fetch("https://api.groq.com/openai/v1/responses", {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "openai/gpt-oss-20b",
-              instructions: `${systemPrompt}
+        const searchModels = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
+        for (const webMdl of searchModels) {
+          try {
+            const response = await fetch("https://api.groq.com/openai/v1/responses", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: webMdl,
+instructions: `${systemPrompt}
 \u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05DC\u05E4\u05E0\u05D9 \u05D4\u05EA\u05E9\u05D5\u05D1\u05D4. \u05E2\u05E0\u05D4 \u05E8\u05E7 \u05DC\u05E4\u05D9 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA \u05E9\u05DE\u05E6\u05D0\u05EA; \u05D0\u05DD \u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D5 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05E9\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9.`,
-              input: convoCtx + webQuery,
-              tools: [{ type: "browser_search" }],
-              tool_choice: "required",
-              max_output_tokens: 300
-            })
-          });
-          if (response.ok) {
-            const result = await response.json();
-            aiAnswer = responsesOutputText(result);
-            webVerified = responsesUsedBrowserSearch(result);
-            if (aiAnswer && webVerified) {
-              logEvent("web_search_verified", { source: "groq_browser_search" });
+                              input: convoCtx + webQuery,
+                tools: [{ type: "browser_search" }],
+                tool_choice: "required",
+                max_output_tokens: 300
+              })
+            });
+            if (response.ok) {
+              const result = await response.json();
+              const candAnswer = responsesOutputText(result);
+              const candVerified = responsesUsedBrowserSearch(result);
+              if (candAnswer && candVerified) {
+                aiAnswer = candAnswer;
+                webVerified = true;
+                logEvent("web_search_verified", { source: "groq_browser_search", model: webMdl });
+                break;
+              }
+              logEvent("web_search_unverified", { model: webMdl, hasAnswer: Boolean(candAnswer), usedSearch: candVerified });
+              if (candAnswer) { aiAnswer = candAnswer; webVerified = false; }
             } else {
-              logEvent("web_search_unverified", { hasAnswer: Boolean(aiAnswer), usedSearch: webVerified });
+              logEvent("web_search_failed", { model: webMdl, status: response.status });
+              if (response.status === 429) await new Promise(function(r4) { setTimeout(r4, 15000); });
             }
-          } else {
-            logEvent("web_search_failed", { status: response.status });
+          } catch (e) {
+            logEvent("web_search_error", { model: webMdl, type: e?.name || "Error" });
           }
-        } catch (e) {
-          logEvent("web_search_error", { type: e?.name || "Error" });
         }
       } else {
         const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
