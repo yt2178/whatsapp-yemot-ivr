@@ -664,7 +664,10 @@ var worker_default = {
       if (k === "bridge_diag") {
         const acct = url.searchParams.get("bridge") === "2" ? 2 : 1;
         const act = url.searchParams.get("action") || "list";
-        const bd = await callBridge(env, { action: act, max: 1 }, acct);
+        let payload = { action: act, max: 1 };
+        const pj = url.searchParams.get("p");
+        if (pj) { try { payload = { action: act, ...JSON.parse(pj) }; } catch (_) {} }
+        const bd = await callBridge(env, payload, acct);
         return Response.json({ account: acct, bridge_raw: bd });
       }
       const v = url.searchParams.get("v");
@@ -2788,9 +2791,43 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
 __name(handleEmail, "handleEmail");
 __name2(handleEmail, "handleEmail");
 __name22(handleEmail, "handleEmail");
+function relTimeHeb(iso) {
+  const t = Date.parse(iso || "");
+  if (!t) return "";
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return "עכשיו";
+  if (mins < 60) return `לפני ${mins} דקות`;
+  const h = Math.floor(mins / 60);
+  if (h < 24) return `לפני ${h} שעות`;
+  const days = Math.floor(h / 24);
+  if (days === 1) return "אתמול";
+  if (days < 30) return `לפני ${days} ימים`;
+  const mo = Math.floor(days / 30);
+  if (mo < 12) return `לפני ${mo} חודשים`;
+  return `לפני ${Math.floor(mo / 12)} שנים`;
+}
+__name(relTimeHeb, "relTimeHeb");
+__name2(relTimeHeb, "relTimeHeb");
+async function chatRecentMessages(env, account, max) {
+  const queries = ["מה", "אני", "תודה", "שלום", "כן", "לא", "טוב", "בסדר", "היי", "בוקר"];
+  const outs = await Promise.all(queries.map((q) => callBridge(env, { action: "chat_search", query: q, max: 30 }, account).catch(() => null)));
+  const byName = {};
+  for (const o of outs) {
+    if (!o || !o.ok) continue;
+    for (const m of o.messages || []) {
+      if (m && m.name && m.text && !byName[m.name]) byName[m.name] = { ...m, ts: Date.parse(m.createTime) || 0 };
+    }
+  }
+  return Object.values(byName).sort((a, b) => b.ts - a.ts).slice(0, Math.max(max || 5, 1));
+}
+__name(chatRecentMessages, "chatRecentMessages");
+__name2(chatRecentMessages, "chatRecentMessages");
 function fmtChatList(messages) {
   if (!messages || !messages.length) return "\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA\u05D9 \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05E6\u05D0\u05D8 \u05DE\u05EA\u05D0\u05D9\u05DE\u05D5\u05EA";
-  const parts = messages.slice(0, 5).map((message, index) => `\u05D4\u05D5\u05D3\u05E2\u05D4 ${index + 1}, \u05DE\u05D0\u05EA ${cleanFromName(message.sender || "\u05E9\u05D5\u05DC\u05D7 \u05DC\u05D0 \u05D9\u05D3\u05D5\u05E2")}, ${String(message.text || "\u05D4\u05D5\u05D3\u05E2\u05D4 \u05DC\u05DC\u05D0 \u05D8\u05E7\u05E1\u05D8").slice(0, 140)}`);
+  const parts = messages.slice(0, 5).map((message, index) => {
+    const rt = relTimeHeb(message.createTime);
+    return `הודעה ${index + 1}, מאת ${cleanFromName(message.sender || "שולח לא ידוע")}${rt ? ", " + rt : ""}, ${String(message.text || "הודעה ללא טקסט").slice(0, 120)}`;
+  });
   return `\u05DE\u05E6\u05D0\u05EA\u05D9 ${messages.length} \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA \u05D1\u05E6\u05D0\u05D8. ${parts.join(". ")}. \u05DB\u05D3\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DE\u05DC\u05D0\u05D4 \u05D0\u05DE\u05D5\u05E8 \u05E7\u05E8\u05D0 \u05D4\u05D5\u05D3\u05E2\u05D4 \u05DE\u05E1\u05E4\u05E8`;
 }
 __name(fmtChatList, "fmtChatList");
@@ -2799,7 +2836,7 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
-    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: unread לקבלת הודעות חדשות, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש או קרא הודעה מספר אחת או קרא הודעה מספר 1 או הודעה מספר שתיים או קריאת הודעה מספר שלוש היא read עם index לפי המספר שנאמר, אחת או 1 זה 1 שתיים או 2 זה 2 שלוש או 3 זה 3 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. פעולות search ו unread כשהבקשה היא לקרוא, לחפש או לבדוק הודעות שהתקבלו, למשל בדוק את הצאטים, תבדוק אם יש הודעות חדשות, מה חדש או יש הודעות חדשות הן כולן unread. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
+    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: recent להצגת ההודעות האחרונות בצאט לפי זמן, לבקשות כמו מה ההודעה האחרונה ששלחו לי, מי שלח לי הודעה, מה חדש בצאט, מה קורה בצאט, תקרא לי את הצאט או תבדוק את הצאט, החזר {"action":"recent","params":{"count":4}}, unread לקבלת הודעות שלא נקראו בלבד, רק כשנאמר במפורש לא נקראו או לא קראתי כמו האם יש הודעות שלא קראתי, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש או קרא הודעה מספר אחת או קרא הודעה מספר 1 או הודעה מספר שתיים או קריאת הודעה מספר שלוש היא read עם index לפי המספר שנאמר, אחת או 1 זה 1 שתיים או 2 זה 2 שלוש או 3 זה 3 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. כלל חשוב: מה ההודעה האחרונה, מי שלח לי הודעה, מה חדש בצאט, בדוק את הצאט או תבדוק אם יש הודעות חדשות הן כולן recent, ואילו unread רק לניסוח מפורש של לא נקראו או לא קראתי. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
@@ -2818,6 +2855,16 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       const saved = await saveContact(env, callerPhone, name, address, params.aliases || params.alias || []);
       logEvent("chat_contact_saved", { ok: saved });
       return saved ? speak(`איש הקשר ${name} נשמר בהצלחה`) : speak("לא הצלחתי לשמור את איש הקשר");
+    }
+    if (plan.action === "recent") {
+      if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "בדיקה");
+      const cnt = Math.min(parseInt(params.count) || 4, 5);
+      const msgs = await chatRecentMessages(env, account, cnt);
+      await kvSetList(env, listKey, { messages: msgs, ts: Date.now(), account });
+      if (!msgs.length) return speak("לא מצאתי הודעות בצאט");
+      const latest = msgs[0];
+      const top = `ההודעה האחרונה בצאט היא מאת ${cleanFromName(latest.sender || "לא ידוע")}, ${relTimeHeb(latest.createTime)}, תוכן: ${String(latest.text).slice(0, 120)}. `;
+      return speak(top + fmtChatList(msgs));
     }
     if (plan.action === "unread" || plan.action === "search") {
       if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "בדיקה");
@@ -2854,6 +2901,11 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       const list = await kvGetList(env, listKey);
       const item = list?.messages?.[(parseInt(params.index) || 1) - 1];
       if (!item) return speak("אין רשימת הודעות צאט פעילה, בקש קודם הודעות חדשות");
+      const shortTxt = String(item.text || "");
+      if (shortTxt && shortTxt.length <= 240) {
+        const rt = relTimeHeb(item.createTime);
+        return speak(`ההודעה מאת ${cleanFromName(item.sender || "לא ידוע")}${rt ? ", " + rt : ""}: ${shortTxt}`);
+      }
       const data = await callBridge(env, { action: "chat_get", name: item.name }, list?.account || account || 1);
       if (!data.ok) return speak("לא הצלחתי לפתוח את הודעת הצאט");
       const answer = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית. הקרא את הודעת הצאט בקצרה ובצורה ברורה, עד ארבעה משפטים.", `מאת ${data.message?.sender || "שולח לא ידוע"}. תוכן: ${data.message?.text || "ללא טקסט"}`, 350);
