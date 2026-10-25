@@ -2809,6 +2809,16 @@ function relTimeHeb(iso) {
 __name(relTimeHeb, "relTimeHeb");
 __name2(relTimeHeb, "relTimeHeb");
 async function chatRecentMessages(env, account, max) {
+  try {
+    const r = await callBridge(env, { action: "chat_search", query: "*", max: 25 }, account);
+    if (r && r.ok && Array.isArray(r.messages)) {
+      const msgs = r.messages.filter((m) => m && m.text);
+      if (msgs.length) {
+        const sorted = msgs.map((m) => ({ ...m, ts: Date.parse(m.createTime) || 0 })).sort((a, b) => b.ts - a.ts);
+        return sorted.slice(0, Math.max(max || 5, 1));
+      }
+    }
+  } catch (_) {}
   const queries = ["מה", "אני", "תודה", "שלום", "כן", "לא", "טוב", "בסדר", "היי", "בוקר"];
   const outs = await Promise.all(queries.map((q) => callBridge(env, { action: "chat_search", query: q, max: 30 }, account).catch(() => null)));
   const byName = {};
