@@ -479,7 +479,7 @@ var worker_default = {
               }
               if (__m[3] === void 0) {
                 const __fuFile = await ttsTextToYemotFile(env, "אמרו את בקשתכם הבאה או נתקו לסיום");
-                if (__fuFile) __converted = __parts.join("&") + "&read=f-" + __fuFile + "=link,,record,/3/rec,,no,yes,,1,30";
+                if (__fuFile) __converted = __parts.join("&") + "&read=f-" + __fuFile + "=link,,record,/3/rec,,no,yes,,1,5";
               }
               __converted = __converted || __parts.join("&");
               if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
@@ -759,28 +759,18 @@ var worker_default = {
       }
       const audioBlob = await audioRes.blob();
       logEvent("recording_downloaded", { bytes: audioBlob.size });
+      let wavInfo = null;
       try {
         const buf = await audioBlob.arrayBuffer();
-        const adv = new DataView(buf);
-        let off = 12, silentAudio = false;
-        while (off + 8 <= adv.byteLength) {
-          const chunkId = String.fromCharCode(adv.getUint8(off), adv.getUint8(off + 1), adv.getUint8(off + 2), adv.getUint8(off + 3));
-          const chunkSize = adv.getUint32(off + 4, true);
-          if (chunkId === "data") {
-            let sum = 0, n = 0;
-            const dend = Math.min(off + 8 + chunkSize, adv.byteLength);
-            for (let p2 = off + 8; p2 + 1 < dend; p2 += 2) {
-              sum += Math.abs(adv.getInt16(p2, true));
-              n++;
-            }
-            if (n > 800 && sum / n < 60) silentAudio = true;
-            break;
-          }
-          off += 8 + chunkSize;
-        }
-        if (silentAudio) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
+        wavInfo = wavSilenceInfo(new DataView(buf));
       } catch (_) {
       }
+      const winKey = "recwin_" + callerPhone;
+      let winState = null;
+      try { const rws = await doStateFetch(env, winKey, "GET"); winState = (rws && rws.value) || null; } catch (_) {}
+      if (winState && winState.ts && Date.now() - winState.ts > 300000) winState = null;
+      const winParts = (winState && Array.isArray(winState.parts)) ? winState.parts : [];
+      if (wavInfo && wavInfo.meanAbs < 60 && !winParts.length) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
       whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
       const formData = new FormData();
       formData.append("file", audioBlob, "recording.wav");
@@ -804,6 +794,15 @@ var worker_default = {
         return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
       }
         transcribedText = (await whisperRes.json()).text?.trim() || "";
+        if (wavInfo && !String(params.ApiCallId || "").startsWith("dbg_")) {
+          const wres = await windowStep(env, winKey, winState, wavInfo, transcribedText);
+          if (wres.continue) {
+            logEvent("win_continue", { max: wres.max, trail: Math.round((wavInfo.trailingSec || 0) * 10) / 10, dur: Math.round((wavInfo.durationSec || 0) * 10) / 10, caller: callerTail(callerPhone) });
+            return textResponse("read=f-/9/r/sil=link,,record,/3/rec,,no,yes,,1," + wres.max);
+          }
+          if (wres.text) transcribedText = wres.text;
+          logEvent("win_complete", { parts: wres.parts, dur: Math.round((wavInfo.durationSec || 0) * 10) / 10, caller: callerTail(callerPhone) });
+        }
       }
 
       transcribedText = await correctTranscription(transcribedText);
@@ -1553,6 +1552,66 @@ async function callBridge(env, payload, account) {
 __name(callBridge, "callBridge");
 __name2(callBridge, "callBridge");
 __name22(callBridge, "callBridge");
+function wavSilenceInfo(adv) {
+  try {
+    let off = 12, sr = 8000, ch = 1, dataOff = -1, dataLen = 0;
+    while (off + 8 <= adv.byteLength) {
+      const chunkId = String.fromCharCode(adv.getUint8(off), adv.getUint8(off + 1), adv.getUint8(off + 2), adv.getUint8(off + 3));
+      const chunkSize = adv.getUint32(off + 4, true);
+      if (chunkId === "fmt ") { ch = adv.getUint16(off + 10, true) || 1; sr = adv.getUint32(off + 12, true) || 8000; }
+      else if (chunkId === "data") { dataOff = off + 8; dataLen = Math.min(chunkSize, adv.byteLength - dataOff); break; }
+      off += 8 + chunkSize + (chunkSize % 2);
+    }
+    if (dataOff < 0 || dataLen < 200) return null;
+    const SPEECH_THRESHOLD = 1400;
+    const nSamples = Math.floor(dataLen / 2 / ch);
+    const perBucket = Math.max(1, Math.floor(sr * 0.25));
+    const rmsArr = [];
+    let totalAbs = 0, totalN = 0, hasSpeech = false;
+    for (let i = 0; i < nSamples; i += perBucket) {
+      const end = Math.min(i + perBucket, nSamples);
+      let sq = 0, n = 0, ab = 0;
+      for (let s2 = i; s2 < end; s2++) { const v = adv.getInt16(dataOff + (s2 * ch) * 2, true); sq += v * v; ab += Math.abs(v); n++; }
+      totalAbs += ab; totalN += n;
+      const rms = n ? Math.sqrt(sq / n) : 0;
+      rmsArr.push(rms);
+      if (rms >= SPEECH_THRESHOLD) hasSpeech = true;
+    }
+    let trailing = 0;
+    for (let i2 = rmsArr.length - 1; i2 >= 0; i2--) { if (rmsArr[i2] < SPEECH_THRESHOLD) trailing++; else break; }
+    return { durationSec: nSamples / sr, hasSpeech, trailingSec: trailing * 0.25, meanAbs: totalN ? totalAbs / totalN : 0 };
+  } catch (_) {
+    return null;
+  }
+}
+__name(wavSilenceInfo, "wavSilenceInfo");
+__name2(wavSilenceInfo, "wavSilenceInfo");
+async function windowStep(env, winKey, winState, info, segText) {
+  const parts = (winState && Array.isArray(winState.parts)) ? winState.parts.slice() : [];
+  const lastMax = (winState && winState.lastMax) || 5;
+  const clearState = async function() { try { await doStateFetch(env, winKey, "PUT", { parts: [], lastMax: 5, ts: 0 }); } catch (_) {} };
+  const earlyEnd = (info.durationSec || 0) > 0 && (info.durationSec || 0) < lastMax - 0.35;
+  if (earlyEnd) {
+    if (segText) parts.push(segText);
+    await clearState();
+    return { continue: false, text: parts.join(" ").trim(), parts: parts.length };
+  }
+  if (!info.hasSpeech) {
+    await clearState();
+    return { continue: false, text: parts.join(" ").trim(), parts: parts.length };
+  }
+  if ((info.trailingSec || 0) >= 1.2) {
+    if (segText) parts.push(segText);
+    await clearState();
+    return { continue: false, text: parts.join(" ").trim(), parts: parts.length };
+  }
+  if (segText) parts.push(segText);
+  const max = (info.trailingSec || 0) >= 0.3 ? 2 : 5;
+  try { await doStateFetch(env, winKey, "PUT", { parts, lastMax: max, ts: Date.now() }); } catch (_) {}
+  return { continue: true, max };
+}
+__name(windowStep, "windowStep");
+__name2(windowStep, "windowStep");
 async function doStateFetch(env, key, method, body) {
   try {
     if (!env.CONT_STATE) return null;
@@ -2565,7 +2624,7 @@ async function askMailRange(env, callerPhone, account) {
   return openQuestion(q);
 }
 function openQuestion(text) {
-  return textResponse(`read=t-${text}=link,,record,/3/rec,,no,yes,,1,30`);
+  return textResponse(`read=t-${text}=link,,record,/3/rec,,no,yes,,1,5`);
 }
 __name(openQuestion, "openQuestion");
 __name2(openQuestion, "openQuestion");
