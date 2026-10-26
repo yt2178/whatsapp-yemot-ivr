@@ -22,5 +22,7 @@ services:
         sync: false  # Set manually in Render dashboard (from Supabase)
       - key: WHATSAPP_HOOK_EVENTS
         value: message
+      - key: WHATSAPP_API_KEY_EXCLUDE_PATH
+        value: health
       - key: WHATSAPP_HOOK_URL
         sync: false  # Optional: set to your webhook receiver
