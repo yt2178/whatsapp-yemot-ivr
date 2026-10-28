@@ -463,23 +463,24 @@ var worker_default = {
         let __converted = null;
         try {
           const __raw = await __res.clone().text();
-          const __m = __raw.match(/^id_list_message=t-([\s\S]*?)(&read=(.*))?$/);
+          const __m = __raw.match(/^id_list_message=t-([\s\S]*?)(&(read|go_to_folder)=([\s\S]*))?$/);
           if (__m) {
             const __parts = [];
             const __mainFile = await ttsTextToYemotFile(env, __m[1]);
             if (__mainFile) {
               __parts.push("id_list_message=f-" + __mainFile);
-              if (__m[3] !== void 0) {
-                const __rm = __m[3].match(/^t-([^=]+)=((?:confirm|account),.*)$/);
+              if (__m[3] === "go_to_folder") {
+                __parts.push("go_to_folder=" + __m[4]);
+              } else if (__m[3] !== void 0) {
+                const __rm = __m[4].match(/^t-([^=]+)=((?:confirm|account),.*)$/);
                 if (__rm) {
                   const __qFile = await ttsTextToYemotFile(env, __rm[1]);
                   if (__qFile) __parts.push("read=f-" + __qFile + "=" + __rm[2]);
-                  else __parts.push("read=" + __m[3]);
-                } else __parts.push("read=" + __m[3]);
+                  else __parts.push("read=" + __m[4]);
+                } else __parts.push("read=" + __m[4]);
               }
               if (__m[3] === void 0) {
-                const __fuFile = await ttsTextToYemotFile(env, "אמרו את בקשתכם הבאה או נתקו לסיום");
-                if (__fuFile) __converted = __parts.join("&") + "&read=f-" + __fuFile + "=link,,record,/3/rec,,no,yes,,1,5";
+                __converted = __parts.join("&") + "&go_to_folder=/3/r";
               }
               __converted = __converted || __parts.join("&");
               if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
@@ -733,7 +734,12 @@ var worker_default = {
       }
     }
     if (!rawPath || !rawPath.trim()) {
-      return textResponse("id_list_message=t-\u05D0\u05E0\u05D0 \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4 \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
+      const nf = await findNewestRecording(env, callerPhone);
+      if (!nf) {
+        logEvent("newflow_greeting", { caller: callerTail(callerPhone) });
+        return textResponse("id_list_message=t-\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD. \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA&go_to_folder=/3/r");
+      }
+      rawPath = nf;
     }
     try {
       let p = rawPath.trim();
@@ -794,7 +800,7 @@ var worker_default = {
         return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
       }
         transcribedText = (await whisperRes.json()).text?.trim() || "";
-        if (wavInfo && !String(params.ApiCallId || "").startsWith("dbg_")) {
+        if (false && wavInfo && !String(params.ApiCallId || "").startsWith("dbg_")) {
           const wres = await windowStep(env, winKey, winState, wavInfo, transcribedText);
           if (wres.continue) {
             logEvent("win_continue", { max: wres.max, trail: Math.round((wavInfo.trailingSec || 0) * 10) / 10, dur: Math.round((wavInfo.durationSec || 0) * 10) / 10, caller: callerTail(callerPhone) });
@@ -1612,6 +1618,39 @@ async function windowStep(env, winKey, winState, info, segText) {
 }
 __name(windowStep, "windowStep");
 __name2(windowStep, "windowStep");
+function parseYemotDate(str) {
+  try {
+    const m = String(str || "").match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/);
+    if (!m) return 0;
+    return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5])).getTime();
+  } catch (_) {
+    return 0;
+  }
+}
+__name(parseYemotDate, "parseYemotDate");
+__name2(parseYemotDate, "parseYemotDate");
+async function findNewestRecording(env, callerPhone) {
+  try {
+    const res = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${env.YEMOT_TOKEN || ""}&path=ivr2:3/r`, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!res.ok) return null;
+    const j = await res.json().catch(() => null);
+    const files = ((j && j.files) || []).filter((f) => /^(\d+)\.wav$/.test(String(f.name || "")));
+    if (!files.length) return null;
+    files.sort((a, b) => parseInt(b.name) - parseInt(a.name));
+    const f = files[0];
+    const st = (await doStateFetch(env, "reclast_" + callerPhone, "GET"))?.value || null;
+    if (st && st.file === f.name) return null;
+    const ts = parseYemotDate(f.date || f.mtime);
+    if (!ts || Date.now() - ts > 36e4) return null;
+    await doStateFetch(env, "reclast_" + callerPhone, "PUT", { file: f.name, ts: Date.now() });
+    logEvent("newflow_recording_found", { file: f.name, dur: f.duration || 0, caller: callerTail(callerPhone) });
+    return f.path || "3/r/" + f.name;
+  } catch (_) {
+    return null;
+  }
+}
+__name(findNewestRecording, "findNewestRecording");
+__name2(findNewestRecording, "findNewestRecording");
 async function doStateFetch(env, key, method, body) {
   try {
     if (!env.CONT_STATE) return null;
@@ -2624,7 +2663,7 @@ async function askMailRange(env, callerPhone, account) {
   return openQuestion(q);
 }
 function openQuestion(text) {
-  return textResponse(`read=t-${text}=link,,record,/3/rec,,no,yes,,1,5`);
+  return textResponse(`id_list_message=t-${text}&go_to_folder=/3/r`);
 }
 __name(openQuestion, "openQuestion");
 __name2(openQuestion, "openQuestion");
