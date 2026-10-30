@@ -737,7 +737,7 @@ var worker_default = {
       const nf = await findNewestRecording(env, callerPhone);
       if (!nf) {
         logEvent("newflow_greeting", { caller: callerTail(callerPhone) });
-        return textResponse("id_list_message=t-\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD. \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA&go_to_folder=/3/r");
+        return textResponse("id_list_message=t-\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA&go_to_folder=/3/r");
       }
       rawPath = nf;
     }
@@ -934,7 +934,7 @@ var worker_default = {
             const _cn = new Date();
             const _ct = _cn.toLocaleTimeString("he-IL", { timeZone: askedTz, hour: "2-digit", minute: "2-digit", hour12: false });
             const _numH = parseInt(_ct.split(":")[0], 10), _numM = parseInt(_ct.split(":")[1], 10);
-            return textResponse("id_list_message=t-\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 \u05D1" + askedCity + " " + hebNumWords(_numH) + " \u05D5" + hebNumWords(_numM));
+            return textResponse("id_list_message=t-\u05D4\u05E9\u05E2\u05D4 \u05E2\u05DB\u05E9\u05D9\u05D5 \u05D1" + askedCity.replace(/[-.&=#%+]/g, " ") + " " + hebNumWords(_numH) + " \u05D5" + hebNumWords(_numM));
           } catch (_) {
           }
         } else {
@@ -2596,7 +2596,7 @@ async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
   await doStateFetch(env, "pend_" + normalizeIsraelPhone(callerPhone), "PUT", pend);
 await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
-  return textResponse(`id_list_message=t-${head}.&read=t-${question}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
+  return textResponse(`id_list_message=t-${head}&read=t-${question}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
 __name2(pendingConfirmRead, "pendingConfirmRead");
