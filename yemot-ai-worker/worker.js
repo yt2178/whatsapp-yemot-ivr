@@ -580,6 +580,10 @@ var worker_default = {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       return await handleTlkRequest(env, params, callerPhone, ctx);
     }
+    if (url.pathname.startsWith("/news/")) {
+      if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(6) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
+      return await handleNewsRequest(env, params, callerPhone, ctx);
+    }
     if (url.pathname.startsWith("/tlk-hq/")) {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(8) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       return await handleHqRequest(env, params, callerPhone, ctx);
@@ -661,6 +665,12 @@ var worker_default = {
           result.errType = e?.name || "Error";
         }
         return Response.json(result);
+      }
+      if (k === "tts") {
+        const text = url.searchParams.get("text") || "";
+        if (!text) return Response.json({ error: "missing text" });
+        const f = await ttsTextToYemotFile(env, text);
+        return Response.json({ file: f });
       }
       if (k === "bridge_diag") {
         const acct = url.searchParams.get("bridge") === "2" ? 2 : 1;
@@ -1651,6 +1661,121 @@ async function findNewestRecording(env, callerPhone) {
 }
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
+function newsNormTitle(t) {
+  return String(t || "").toLowerCase().replace(/["'׳״.,:;!?()\[\]\-–—|/\\]/g, " ").replace(/\s+/g, " ").trim();
+}
+__name(newsNormTitle, "newsNormTitle");
+function newsIsDup(titleA, titleB) {
+  const a = new Set(newsNormTitle(titleA).split(" ").filter((w) => w.length > 2));
+  const ws = newsNormTitle(titleB).split(" ").filter((w) => w.length > 2);
+  if (!ws.length) return true;
+  let hit = 0;
+  for (const w of ws) if (a.has(w)) hit++;
+  return hit / ws.length >= 0.62;
+}
+__name(newsIsDup, "newsIsDup");
+async function fetchNewsItems(env) {
+  const out = [];
+  const t0 = Date.now();
+  try {
+    const r = await fetch("https://mivzak.app/api/feed", { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" }, signal: AbortSignal.timeout(15000) });
+    if (r.ok) {
+      const j = await r.json();
+      for (const it of (j.items || [])) {
+        const t = Number(it.ts || 0) || Date.parse(it.publishedAt || "") || 0;
+        const title = String(it.title || "").trim();
+        if (!title || !t) continue;
+        const impRaw = String(it.importance || "low");
+        const isQuality = it.sourceType !== "telegram" || it.breaking === true || impRaw === "high" || impRaw === "critical" || impRaw === "medium";
+        if (!isQuality) continue;
+        out.push({ t, title, src: String(it.source || ""), imp: it.breaking === true || impRaw === "high" || impRaw === "critical" ? 2 : impRaw === "medium" ? 1 : 0, from: "mivzak" });
+      }
+    }
+    logEvent("news_mivzak", { count: out.length, ms: Date.now() - t0 });
+  } catch (e) {
+    logEvent("news_mivzak_fail", { type: e?.name || "Error" });
+  }
+  {
+    try {
+      const r2 = await fetch(`https://koteretplus.com/api/news?shard=0&_=${Math.floor(Date.now() / 15000)}`, { headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" }, signal: AbortSignal.timeout(15000) });
+      if (r2.ok) {
+        const j2 = await r2.json();
+        for (const it of (j2.items || [])) {
+          const t = Date.parse(it.latestReportAt || it.publishedAt || "") || 0;
+          const title = String(it.title || "").trim();
+          if (!title || !t) continue;
+          out.push({ t, title, src: String(it.sourceName || it.publisher || ""), imp: Number(it.reportCount || 0) > 2 ? 1 : 0, from: "koteret" });
+        }
+      }
+      logEvent("news_koteret", { total: out.length });
+    } catch (e) {
+      logEvent("news_koteret_fail", { type: e?.name || "Error" });
+    }
+  }
+  return out;
+}
+__name(fetchNewsItems, "fetchNewsItems");
+async function handleNewsRequest(env, params, callerPhone, ctx) {
+  const key = String(params.newsopt || params.key || "").trim();
+  const stateKey = "news_" + callerPhone;
+  let state = null;
+  try { const raw = await env.USER_MEMORY.get(stateKey); state = raw ? JSON.parse(raw) : null; } catch (_) {}
+  const needFresh = !state || !Array.isArray(state.items) || !state.items.length || key === "" || key === "3" || Date.now() - (state.ts || 0) > 12 * 6e4;
+  if (needFresh) {
+    let all = await fetchNewsItems(env);
+    const cutoff = Date.now() - 30 * 36e5;
+    all = all.filter((x) => x.t >= cutoff && x.title.length >= 18);
+    all.sort((a, b) => b.t - a.t);
+    const picked = [];
+    for (const it of all) {
+      if (picked.length >= 42) break;
+      if (picked.some((p) => newsIsDup(p.title, it.title))) continue;
+      picked.push(it);
+    }
+    state = { items: picked, page: 0, ts: Date.now() };
+    logEvent("news_built", { items: picked.length, raw: all.length, caller: callerTail(callerPhone) });
+  }
+  const pageSize = 6;
+  const totalPages = Math.max(1, Math.ceil(state.items.length / pageSize));
+  if (key === "1") state.page = Math.min((state.page || 0) + 1, totalPages);
+  else if (key === "2") state.page = state.page || 0;
+  else if (key === "4") state.page = Math.max((state.page || 0) - 1, 0);
+  else state.page = state.page || 0;
+  try { ctx.waitUntil(env.USER_MEMORY.put(stateKey, JSON.stringify(state), { expirationTtl: 1800 })); } catch (_) {}
+  if (!state.items.length) {
+    const emptyFile = await ttsTextToYemotFile(env, "\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DC\u05D5\u05E3 \u05D7\u05D3\u05E9\u05D5\u05EA \u05DB\u05E2\u05EA, \u05E0\u05E1\u05D5 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05D3\u05E7\u05D4");
+    return new Response(emptyFile ? `id_list_message=f-${emptyFile}&go_to_folder=/` : "go_to_folder=/", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
+  if ((state.page || 0) * pageSize >= state.items.length) {
+    const closed = await ttsTextToYemotFile(env, "\u05D0\u05DC\u05D4 \u05DB\u05DC \u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05E9\u05D9\u05E9 \u05DC\u05D9 \u05DB\u05E2\u05EA, \u05D7\u05D5\u05D6\u05E8 \u05DC\u05EA\u05E4\u05E8\u05D9\u05D8 \u05D4\u05E8\u05D0\u05E9\u05D9");
+    return new Response(closed ? `id_list_message=f-${closed}&go_to_folder=/` : "go_to_folder=/", { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  }
+  const chunk = state.items.slice((state.page || 0) * pageSize, (state.page || 0) * pageSize + pageSize);
+  let intro = "";
+  if ((state.page || 0) === 0) {
+    try {
+      const digest = await groqChatShort(env.GROQ_KEY || GROQ_KEY, "\u05D0\u05EA\u05D4 \u05E7\u05D5\u05E8\u05D0 \u05DB\u05D5\u05EA\u05E8\u05D5\u05EA \u05D7\u05D3\u05E9\u05D5\u05EA \u05D5\u05DB\u05D5\u05EA\u05D1 \u05E1\u05D9\u05DB\u05D5\u05DD \u05E7\u05E6\u05E8 \u05DC\u05D4\u05E7\u05E8\u05D0\u05D4 \u05D1\u05D8\u05DC\u05E4\u05D5\u05DF. \u05DB\u05EA\u05D5\u05D1 2 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD \u05E7\u05E6\u05E8\u05D9\u05DD \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05E9\u05DE\u05E1\u05DB\u05DE\u05D9\u05DD \u05DE\u05D4 \u05E7\u05E8\u05D4 \u05DC\u05D0\u05D7\u05E8\u05D5\u05E0\u05D4, \u05D1\u05DC\u05D9 \u05DE\u05E1\u05E4\u05E8\u05D9\u05DD \u05D5\u05D1\u05DC\u05D9 \u05E4\u05D9\u05E1\u05D5\u05E7 \u05DE\u05E8\u05D5\u05D1\u05D4. \u05D0\u05DC \u05EA\u05DB\u05EA\u05D5\u05D1 \u05DB\u05D5\u05EA\u05E8\u05D5\u05EA \u05D0\u05D5 \u05E8\u05E9\u05D9\u05DE\u05D5\u05EA.", chunk.slice(0, 8).map((x) => x.title).join(" | "), 250);
+      if (digest && digest.trim().length > 10) intro = "\u05E1\u05D9\u05DB\u05D5\u05DD \u05DE\u05D4\u05E9\u05E2\u05D4 \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA. " + digest.trim() + ". \u05D5\u05E2\u05DB\u05E9\u05D9\u05D5 \u05D4\u05DB\u05D5\u05EA\u05E8\u05D5\u05EA \u05DE\u05D4\u05D7\u05D3\u05E9 \u05DC\u05D9\u05E9\u05DF. ";
+    } catch (_) {}
+    if (!intro) intro = "\u05D4\u05E0\u05D4 \u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA \u05DE\u05D4\u05D7\u05D3\u05E9 \u05DC\u05D9\u05E9\u05DF. ";
+  } else {
+    intro = "\u05D4\u05DE\u05E9\u05DA \u05D4\u05D7\u05D3\u05E9\u05D5\u05EA. ";
+  }
+  const itemsText = chunk.map((x, i) => {
+    const when = relTimeHeb(new Date(x.t).toISOString());
+    const src = x.src ? ` \u05DE\u05D0\u05EA ${x.src}` : "";
+    const shortTitle = String(x.title).length > 150 ? String(x.title).slice(0, 150) + "..." : String(x.title);
+    return `${i + 1}. ${shortTitle}${src}, ${when}.`;
+  }).join(" ");
+  const head = "\u05D3\u05E3 " + ((state.page || 0) + 1) + " \u05DE\u05EA\u05D5\u05DA " + totalPages + ". ";
+  const speechText = (intro + head + itemsText).replace(/[.]/g, ",");
+  const promptText = state.page + 1 < totalPages ? "\u05DC\u05D4\u05DE\u05E9\u05DA \u05DC\u05D7\u05D3\u05E9\u05D5\u05EA \u05D4\u05E7\u05D5\u05D3\u05DE\u05D5\u05EA \u05D4\u05E7\u05D9\u05E9\u05D5 \u05D0\u05D7\u05EA, \u05DC\u05D7\u05D6\u05E8\u05D4 \u05E2\u05DC \u05D4\u05D3\u05E3 \u05D4\u05E7\u05D9\u05E9\u05D5 \u05E9\u05EA\u05D9\u05DD, \u05DC\u05E8\u05E2\u05E0\u05D5\u05DF \u05D4\u05E7\u05D9\u05E9\u05D5 \u05E9\u05DC\u05D5\u05E9" : "\u05DC\u05D7\u05D6\u05E8\u05D4 \u05E2\u05DC \u05D4\u05D3\u05E3 \u05D4\u05E7\u05D9\u05E9\u05D5 \u05E9\u05EA\u05D9\u05DD, \u05DC\u05E8\u05E2\u05E0\u05D5\u05DF \u05D4\u05E7\u05D9\u05E9\u05D5 \u05E9\u05DC\u05D5\u05E9, \u05DC\u05D7\u05D6\u05E8\u05D4 \u05DC\u05EA\u05E4\u05E8\u05D9\u05D8 \u05D4\u05E7\u05D9\u05E9\u05D5 \u05D0\u05E4\u05E1";
+  const speechFile = await ttsTextToYemotFile(env, speechText);
+  const promptFile = await ttsTextToYemotFile(env, promptText);
+  const body = speechFile && promptFile ? `id_list_message=f-${speechFile}&read=f-${promptFile}=newsopt,no,1,1,20,Digits,yes,yes,,,,,None,` : (speechFile ? `id_list_message=f-${speechFile}` : "go_to_folder=/");
+  return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+__name(handleNewsRequest, "handleNewsRequest");
 async function doStateFetch(env, key, method, body) {
   try {
     if (!env.CONT_STATE) return null;
@@ -3489,7 +3614,7 @@ __name2(makeDocx, "makeDocx");
 __name22(makeDocx, "makeDocx");
 
 // ===== מידע חי על שלוחות הקו =====
-const LINE_EXT_DESC = { 1: "הודעות חדשות מהוואטסאפ. בזמן האזנה, הקשה על שבע מעבירה את ההודעה המושמעת לתמלול באיכות גבוהה", 2: "הקלטת הודעת שמע או שליחת הודעת טקסט לוואטסאפ", 3: "העוזר החכם. שאלות, מיילים, צאטים, תזכורות, מזג אוויר ומטבעות בדיבור חופשי", 4: "כל היסטוריית ההודעות מהוואטסאפ. גם כאן, הקשה על שבע בזמן האזנה מעבירה את ההודעה לתמלול באיכות גבוהה", 5: "איפוס תיקיית ההודעות החדשות, כדי שלא יושמעו שוב", 6: "הרשמה לצינתוק, שיחת חינם שמודיעה על הודעות פרטיות חדשות", 7: "הקלטה ותמלול רגיל. הקלטה מהטלפון או העלאת קובץ, והתמלול מגיע למייל ולאתר האישי", 8: "תמלול באיכות גבוהה. הקלטה ישירה במקש אחת, או העברת קובץ שמע לתיקיית ההשלפה בשלוחה שמונה, והתמלול המוקפד מגיע למייל בקובץ וורד" };
+const LINE_EXT_DESC = { 1: "הודעות חדשות מהוואטסאפ. בזמן האזנה, הקשה על שבע מעבירה את ההודעה המושמעת לתמלול באיכות גבוהה", 2: "הקלטת הודעת שמע או שליחת הודעת טקסט לוואטסאפ", 3: "העוזר החכם. שאלות, מיילים, צאטים, תזכורות, מזג אוויר ומטבעות בדיבור חופשי", 4: "כל היסטוריית ההודעות מהוואטסאפ. גם כאן, הקשה על שבע בזמן האזנה מעבירה את ההודעה לתמלול באיכות גבוהה", 5: "איפוס תיקיית ההודעות החדשות, כדי שלא יושמעו שוב", 6: "הרשמה לצינתוק, שיחת חינם שמודיעה על הודעות פרטיות חדשות", 7: "הקלטה ותמלול רגיל. הקלטה מהטלפון או העלאת קובץ, והתמלול מגיע למייל ולאתר האישי", 8: "תמלול באיכות גבוהה. הקלטה ישירה במקש אחת, או העברת קובץ שמע לתיקיית ההשלפה בשלוחה שמונה, והתמלול המוקפד מגיע למייל בקובץ וורד", 9: "חדשות בזמן אמת. הקראת כותרות החדשות האחרונות מהחדשות ביותר לישן, עם סיכום קצר ודפדוף" };
 __name(LINE_EXT_DESC, "LINE_EXT_DESC");
 __name2(LINE_EXT_DESC, "LINE_EXT_DESC");
 __name22(LINE_EXT_DESC, "LINE_EXT_DESC");
