@@ -28,4 +28,4 @@ new_sqlite_classes = ["ContState"]
 
 # ── CRON: בדיקת תזכורות לצורך צינטוק ──
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["*/10 * * * *", "*/2 * * * *"]
