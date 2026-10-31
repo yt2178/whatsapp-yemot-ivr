@@ -1674,6 +1674,14 @@ function newsIsDup(titleA, titleB) {
   return hit / ws.length >= 0.62;
 }
 __name(newsIsDup, "newsIsDup");
+function newsCleanVerbatim(t) {
+  let x = String(t || "");
+  x = x.replace(/https?:\/\/\S+/g, " ");
+  x = x.replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}]/gu, " ");
+  x = x.replace(/\s+/g, " ").trim();
+  return x;
+}
+__name(newsCleanVerbatim, "newsCleanVerbatim");
 async function fetchNewsItems(env) {
   const out = [];
   const t0 = Date.now();
@@ -1688,7 +1696,7 @@ async function fetchNewsItems(env) {
         const impRaw = String(it.importance || "low");
         const isQuality = it.sourceType !== "telegram" || it.breaking === true || impRaw === "high" || impRaw === "critical" || impRaw === "medium";
         if (!isQuality) continue;
-        out.push({ t, title, src: String(it.source || ""), imp: it.breaking === true || impRaw === "high" || impRaw === "critical" ? 2 : impRaw === "medium" ? 1 : 0, from: "mivzak" });
+        out.push({ id: String(it.id || ""), t, title, src: String(it.source || ""), imp: it.breaking === true || impRaw === "high" || impRaw === "critical" ? 2 : impRaw === "medium" ? 1 : 0, from: "mivzak" });
       }
     }
     logEvent("news_mivzak", { count: out.length, ms: Date.now() - t0 });
@@ -1715,7 +1723,46 @@ async function fetchNewsItems(env) {
   return out;
 }
 __name(fetchNewsItems, "fetchNewsItems");
+async function handleBreakingRequest(env, params, callerPhone, ctx) {
+  const key = String(params.newsopt || params.key || "").trim();
+  const seenKey = "alerts_seen_" + callerPhone;
+  let seen = [];
+  try { seen = JSON.parse((await env.USER_MEMORY.get(seenKey)) || "[]") || []; } catch (_) {}
+  let all = await fetchNewsItems(env);
+  const cutoff = Date.now() - 18 * 36e5;
+  all = all.filter((x) => x.t >= cutoff);
+  all.sort((a, b) => b.t - a.t);
+  const breaking = all.filter((x) => x.imp >= 2 || x.breaking === true);
+  let list = [];
+  if (breaking.length) {
+    list = breaking.slice(0, 8);
+    if (key === "1") list = list.filter((x) => !seen.includes(x.id || x.title));
+  }
+  const firstTime = key !== "1";
+  let speech;
+  if (!list.length) {
+    speech = key === "1" ? "אין מבזקים חדשים כרגע. הקישו אחת לבדיקה נוספת" : "אין מבזקים דחופים בשעות האחרונות. הקישו אחת לבדיקה חוזרת";
+  } else {
+    const items = list.map((x) => {
+      const when = relTimeHeb(new Date(x.t).toISOString());
+      const src = x.src ? ` מאת ${x.src}` : "";
+      return `${newsCleanVerbatim(x.title)}${src}, ${when}.`;
+    }).join(" ");
+    speech = (firstTime ? "מבזקים דחופים. " : "מבזק חדש. ") + items;
+  }
+  try {
+    const merged = Array.from(new Set([...(list.map((x) => x.id || x.title)), ...seen])).slice(0, 120);
+    ctx.waitUntil(env.USER_MEMORY.put(seenKey, JSON.stringify(merged), { expirationTtl: 86400 }));
+  } catch (_) {}
+  logEvent("breaking_read", { count: list.length, key: key || "entry", caller: callerTail(callerPhone) });
+  const speechFile = await ttsTextToYemotFile(env, speech);
+  const promptFile = await ttsTextToYemotFile(env, "לבדיקת מבזקים חדשים הקישו אחת, לחזרה לתפריט הקישו אפס");
+  const body = speechFile && promptFile ? `id_list_message=f-${speechFile}&read=f-${promptFile}=newsopt,no,1,1,20,Digits,yes,yes,,,,,None,` : (speechFile ? `id_list_message=f-${speechFile}` : "go_to_folder=/");
+  return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
+}
+__name(handleBreakingRequest, "handleBreakingRequest");
 async function handleNewsRequest(env, params, callerPhone, ctx) {
+  if (String(params.mode || "") === "breaking") return await handleBreakingRequest(env, params, callerPhone, ctx);
   const key = String(params.newsopt || params.key || "").trim();
   const stateKey = "news_" + callerPhone;
   let state = null;
@@ -3614,7 +3661,7 @@ __name2(makeDocx, "makeDocx");
 __name22(makeDocx, "makeDocx");
 
 // ===== מידע חי על שלוחות הקו =====
-const LINE_EXT_DESC = { 1: "הודעות חדשות מהוואטסאפ. בזמן האזנה, הקשה על שבע מעבירה את ההודעה המושמעת לתמלול באיכות גבוהה", 2: "הקלטת הודעת שמע או שליחת הודעת טקסט לוואטסאפ", 3: "העוזר החכם. שאלות, מיילים, צאטים, תזכורות, מזג אוויר ומטבעות בדיבור חופשי", 4: "כל היסטוריית ההודעות מהוואטסאפ. גם כאן, הקשה על שבע בזמן האזנה מעבירה את ההודעה לתמלול באיכות גבוהה", 5: "איפוס תיקיית ההודעות החדשות, כדי שלא יושמעו שוב", 6: "הרשמה לצינתוק, שיחת חינם שמודיעה על הודעות פרטיות חדשות", 7: "הקלטה ותמלול רגיל. הקלטה מהטלפון או העלאת קובץ, והתמלול מגיע למייל ולאתר האישי", 8: "תמלול באיכות גבוהה. הקלטה ישירה במקש אחת, או העברת קובץ שמע לתיקיית ההשלפה בשלוחה שמונה, והתמלול המוקפד מגיע למייל בקובץ וורד", 9: "חדשות בזמן אמת. הקראת כותרות החדשות האחרונות מהחדשות ביותר לישן, עם סיכום קצר ודפדוף" };
+const LINE_EXT_DESC = { 1: "הודעות חדשות מהוואטסאפ. בזמן האזנה, הקשה על שבע מעבירה את ההודעה המושמעת לתמלול באיכות גבוהה", 2: "הקלטת הודעת שמע או שליחת הודעת טקסט לוואטסאפ", 3: "העוזר החכם. שאלות, מיילים, צאטים, תזכורות, מזג אוויר ומטבעות בדיבור חופשי", 4: "כל היסטוריית ההודעות מהוואטסאפ. גם כאן, הקשה על שבע בזמן האזנה מעבירה את ההודעה לתמלול באיכות גבוהה", 5: "איפוס תיקיית ההודעות החדשות, כדי שלא יושמעו שוב", 6: "הרשמה לצינתוק, שיחת חינם שמודיעה על הודעות פרטיות חדשות", 7: "הקלטה ותמלול רגיל. הקלטה מהטלפון או העלאת קובץ, והתמלול מגיע למייל ולאתר האישי", 8: "תמלול באיכות גבוהה. הקלטה ישירה במקש אחת, או העברת קובץ שמע לתיקיית ההשלפה בשלוחה שמונה, והתמלול המוקפד מגיע למייל בקובץ וורד", 9: "חדשות בזמן אמת. סיכום קצר של מה שקרה לאחרונה והקראת הכותרות מהחדשות ביותר לישן, עם דפדוף", 0: "מבזקים דחופים. הקראת ההודעות המתפרצות כפי שנכתבו, הכי מהר, בלי עיבוד" };
 __name(LINE_EXT_DESC, "LINE_EXT_DESC");
 __name2(LINE_EXT_DESC, "LINE_EXT_DESC");
 __name22(LINE_EXT_DESC, "LINE_EXT_DESC");
