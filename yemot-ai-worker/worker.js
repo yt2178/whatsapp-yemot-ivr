@@ -1724,8 +1724,20 @@ function mergeWavList(parts) {
 async function buildNewsAudio(env) {
   const all = await fetchNewsItems(env);
   const now = Date.now();
-  let pool = all.filter((x) => x.t >= now - 20 * 6e4 && String(x.title || "").trim().length >= 15);
-  if (pool.length < 2) pool = all.filter((x) => x.t >= now - 60 * 6e4 && String(x.title || "").trim().length >= 15);
+  const minLen = (x) => String(x.title || "").trim().length >= 15;
+  const windows = [
+    { ms: 20 * 6e4, label: "\u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05DE\u05D4\u05D3\u05E7\u05D5\u05EA \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA." },
+    { ms: 60 * 6e4, label: "\u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05DE\u05D4\u05E9\u05E2\u05D4 \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D4." },
+    { ms: 3 * 36e5, label: "\u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05DE\u05D4\u05E9\u05E2\u05D5\u05EA \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA." },
+    { ms: 8 * 36e5, label: "\u05D4\u05D7\u05D3\u05E9\u05D5\u05EA \u05D4\u05D0\u05D7\u05E8\u05D5\u05E0\u05D5\u05EA \u05E9\u05DE\u05E6\u05D0\u05EA\u05D9." }
+  ];
+  let pool = [];
+  let winLabel = windows[0].label;
+  for (const w of windows) {
+    pool = all.filter((x) => x.t >= now - w.ms && minLen(x));
+    winLabel = w.label;
+    if (pool.length) break;
+  }
   pool.sort((a, b) => b.t - a.t);
   const dedup = [];
   for (const it of pool) { if (!dedup.some((p) => newsIsDup(p.title, it.title))) dedup.push(it); if (dedup.length >= 8) break; }
@@ -1742,7 +1754,7 @@ async function buildNewsAudio(env) {
     const src = x.src ? " מאת " + x.src : "";
     rawLines.push(newsCleanVerbatim(String(x.title).slice(0, 160)) + src + ", " + when + ".");
   });
-  const lines = ["החדשות מהדקות האחרונות."];
+  const lines = [winLabel];
   let aiUsed = false;
   try {
     const prompt = [
@@ -1755,7 +1767,7 @@ async function buildNewsAudio(env) {
     ].join("\n");
     const aiOut = await groqChatShort(env.GROQ_KEY || GROQ_KEY, prompt, 700);
     const aiLines = String(aiOut || "").split(/\n+/).map((l) => l.replace(/^[-*\d.\s]+/, "").trim()).filter((l) => l.length > 12).slice(0, 10);
-    if (aiLines.length >= 2) {
+    if (aiLines.length >= 1 && aiLines.join(" ").length >= 40) {
       aiLines.forEach((l) => lines.push(/[.!?]$/.test(l) ? l : l + "."));
       aiUsed = true;
     }
