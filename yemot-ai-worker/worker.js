@@ -796,7 +796,7 @@ var worker_default = {
       try { const rws = await doStateFetch(env, winKey, "GET"); winState = (rws && rws.value) || null; } catch (_) {}
       if (winState && winState.ts && Date.now() - winState.ts > 300000) winState = null;
       const winParts = (winState && Array.isArray(winState.parts)) ? winState.parts : [];
-      if (wavInfo && wavInfo.meanAbs < 60 && !winParts.length) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
+      if (wavInfo && !wavInfo.hasSpeech && !winParts.length) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD&go_to_folder=/3/r");
       whisperContacts = callerPhone ? await getContacts(env, callerPhone) : [];
       const formData = new FormData();
       formData.append("file", audioBlob, "recording.wav");
