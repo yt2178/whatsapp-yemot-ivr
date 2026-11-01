@@ -512,7 +512,7 @@ var worker_default = {
   },
   async scheduled(event, env, ctx) {
     try {
-      if (String(event.cron || "").startsWith("*/2")) {
+      if (String(event.cron || "") === "* * * * *" || String(event.cron || "").startsWith("*/2")) {
         try { await buildNewsAudio(env); } catch (_) {}
         return;
       }
@@ -1730,6 +1730,12 @@ async function buildNewsAudio(env) {
   const dedup = [];
   for (const it of pool) { if (!dedup.some((p) => newsIsDup(p.title, it.title))) dedup.push(it); if (dedup.length >= 8) break; }
   if (!dedup.length) return { ok: false, reason: "empty" };
+  const sigNow = dedup.map((x) => x.id || x.title).join("|");
+  try {
+    const prevRaw = await env.USER_MEMORY.get("news_audio_sig");
+    const prev = prevRaw ? JSON.parse(prevRaw) : null;
+    if (prev && prev.sig === sigNow && Date.now() - (prev.at || 0) < 180000) return { ok: true, skipped: true };
+  } catch (_) {}
   const rawLines = [];
   dedup.forEach((x) => {
     const when = relTimeHeb(new Date(x.t).toISOString());
@@ -1777,6 +1783,7 @@ async function buildNewsAudio(env) {
   fd.append("file", new Blob([merged], { type: "audio/wav" }), "news.wav");
   const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr2:0/000.wav&convertAudio=1", { method: "POST", body: fd });
   const upj = await up.json().catch(() => ({}));
+  try { await env.USER_MEMORY.put("news_audio_sig", JSON.stringify({ sig: sigNow, at: Date.now() })); } catch (_) {}
   logEvent("news_audio_built", { items: dedup.length, parts: parts.length, bytes: merged.length, ai: aiUsed, ok: upj.responseStatus || "" });
   return { ok: upj.responseStatus === "OK", items: dedup.length, bytes: merged.length };
 }
