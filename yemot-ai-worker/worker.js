@@ -1730,12 +1730,31 @@ async function buildNewsAudio(env) {
   const dedup = [];
   for (const it of pool) { if (!dedup.some((p) => newsIsDup(p.title, it.title))) dedup.push(it); if (dedup.length >= 8) break; }
   if (!dedup.length) return { ok: false, reason: "empty" };
-  const lines = ["החדשות מהדקות האחרונות."];
+  const rawLines = [];
   dedup.forEach((x) => {
     const when = relTimeHeb(new Date(x.t).toISOString());
     const src = x.src ? " מאת " + x.src : "";
-    lines.push(newsCleanVerbatim(String(x.title).slice(0, 160)) + src + ", " + when + ".");
+    rawLines.push(newsCleanVerbatim(String(x.title).slice(0, 160)) + src + ", " + when + ".");
   });
+  const lines = ["החדשות מהדקות האחרונות."];
+  let aiUsed = false;
+  try {
+    const prompt = [
+      "אתה עורך חדשות בקו טלפוני. לפניך הודעות שפורסמו בדקות האחרונות, מהחדשה לישנה.",
+      "עבד כל הודעה לשורה אחת קולחת וקצרה (עד 20 מילים) שמתאימה להקראה בקול רם, ושמור בה את שם המקור והזמן.",
+      "שמור את כל העובדות, אל תוסיף מידע חדש, אל תאחד הודעות שונות ואל תמחק אף הודעה.",
+      "החזר רק את השורות המוכנות, שורה לכל הודעה, ללא מספור וללא הקדמות.",
+      "ההודעות:",
+      ...rawLines
+    ].join("\n");
+    const aiOut = await groqChatShort(env.GROQ_KEY || GROQ_KEY, prompt, 700);
+    const aiLines = String(aiOut || "").split(/\n+/).map((l) => l.replace(/^[-*\d.\s]+/, "").trim()).filter((l) => l.length > 12).slice(0, 10);
+    if (aiLines.length >= 2) {
+      aiLines.forEach((l) => lines.push(/[.!?]$/.test(l) ? l : l + "."));
+      aiUsed = true;
+    }
+  } catch (_) {}
+  if (!aiUsed) rawLines.forEach((l) => lines.push(l));
   const tok = env.YEMOT_TOKEN || "";
   const parts = [];
   for (const line of lines) {
@@ -1756,9 +1775,9 @@ async function buildNewsAudio(env) {
   }
   const fd = new FormData();
   fd.append("file", new Blob([merged], { type: "audio/wav" }), "news.wav");
-  const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr2:0/1.wav&convertAudio=1", { method: "POST", body: fd });
+  const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr2:0/000.wav&convertAudio=1", { method: "POST", body: fd });
   const upj = await up.json().catch(() => ({}));
-  logEvent("news_audio_built", { items: dedup.length, parts: parts.length, bytes: merged.length, ok: upj.responseStatus || "" });
+  logEvent("news_audio_built", { items: dedup.length, parts: parts.length, bytes: merged.length, ai: aiUsed, ok: upj.responseStatus || "" });
   return { ok: upj.responseStatus === "OK", items: dedup.length, bytes: merged.length };
 }
 function newsCleanVerbatim(t) {
