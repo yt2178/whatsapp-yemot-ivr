@@ -62,7 +62,8 @@ function needsWebSearch(text) {
   if (clock && !explicit) return false;
   const liveSources = /(?:שער|דולר|אירו|מטבע|חליפין|מזג|אוויר|טמפרטורה|ביטק|חמרון)/;
   if (liveSources.test(q) && !explicit) return false;
-  return explicit || /(?:היום|עכשיו|כרגע|עדכני|עדכנית|חדשות|מחיר|שער|דולר|אירו|מזג|תוצאה|לוח זמנים|טיסה|רכבת|אוטובוס)/.test(q);
+  const newsy = /(?:אתמול|מחר|השבוע|החודש|מה קרה|קרה משהו|מי ניצח|ניצחה|הפסיד|הפסידה|מתי מתחיל|מספר טלפון|טלפון של|כתובת של|שעות פתיחה|פתוח היום|סגור היום|הפוגה|מבצע צבאי|מלחמה|רקטות|טילים|פיגוע|בחירות|ממשלה|ראש הממשלה|כמה עולה|תוצאות|משחק|ליגה|שיעור|מדד|בורסה|מניה|קריפטו)/.test(q);
+  return explicit || newsy || /(?:היום|עכשיו|כרגע|עדכני|עדכנית|חדשות|מחיר|שער|דולר|אירו|מזג|תוצאה|לוח זמנים|טיסה|רכבת|אוטובוס)/.test(q);
 }
 __name(needsWebSearch, "needsWebSearch");
 __name2(needsWebSearch, "needsWebSearch");
@@ -756,8 +757,14 @@ var worker_default = {
     if (!rawPath || !rawPath.trim()) {
       const nf = await findNewestRecording(env, callerPhone);
       if (!nf) {
-        logEvent("newflow_greeting", { caller: callerTail(callerPhone) });
-        return textResponse("id_list_message=t-\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA&go_to_folder=/3/r");
+        let midCall = false;
+        try {
+          const lastRec = (await doStateFetch(env, "reclast_" + callerPhone, "GET"))?.value;
+          midCall = Boolean(lastRec && lastRec.ts && Date.now() - lastRec.ts < 20 * 6e4);
+        } catch (_) {}
+        logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
+        const msg = midCall ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
+        return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
       rawPath = nf;
     }
@@ -1411,6 +1418,12 @@ instructions: `${systemPrompt}
           }
         }
       }
+      if (!useWebSearch && /(?:\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D0\u05DE\u05EA|\u05D0\u05D9\u05DF \u05DC\u05D9 \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9|\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05D0\u05DE\u05EA|\u05EA\u05E0\u05E1\u05D4 \u05DC\u05D7\u05E4\u05E9|\u05D0\u05E4\u05E9\u05E8 \u05DC\u05E0\u05E1\u05D5\u05EA \u05DC\u05D7\u05E4\u05E9|\u05DC\u05D7\u05E4\u05E9 \u05D1\u05D2\u05D5\u05D2\u05DC)/.test(String(aiAnswer || ""))) {
+        try {
+          const retryRes = await fetch("https://api.groq.com/openai/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-oss-120b", instructions: `${systemPrompt}\n\u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05D5\u05E2\u05E0\u05D4 \u05DE\u05D4\u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D1\u05E7\u05E6\u05E8\u05D4.`, input: convoCtx + webQuery, tools: [{ type: "browser_search" }], tool_choice: "required", max_output_tokens: 300 }) });
+          if (retryRes.ok) { const retryJson = await retryRes.json(); const retryAns = responsesOutputText(retryJson); if (retryAns && responsesUsedBrowserSearch(retryJson)) { aiAnswer = retryAns; webVerified = true; logEvent("web_search_retry_ok", {}); } }
+        } catch (_) {}
+      }
       if (useWebSearch && !webVerified) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9 \u05D1\u05E8\u05E9\u05EA, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05DB\u05DE\u05D4 \u05D3\u05E7\u05D5\u05EA");
       if (!aiAnswer.trim()) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D1\u05E6\u05E2 \u05D0\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05E8\u05D2\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2");
       logEvent("answer_ready", { chars: aiAnswer.length });
@@ -1650,6 +1663,14 @@ function parseYemotDate(str) {
 __name(parseYemotDate, "parseYemotDate");
 __name2(parseYemotDate, "parseYemotDate");
 async function findNewestRecording(env, callerPhone) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const found = await findNewestRecordingOnce(env, callerPhone);
+    if (found) return found;
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 800));
+  }
+  return null;
+}
+async function findNewestRecordingOnce(env, callerPhone) {
   try {
     const res = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${env.YEMOT_TOKEN || ""}&path=ivr2:3/r`, { headers: { "User-Agent": "Mozilla/5.0" } });
     if (!res.ok) return null;
@@ -2909,7 +2930,7 @@ async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const full = String(promptText || "");
   const marker = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA";
   const cut = full.indexOf(marker);
-  const head = (cut > 0 ? full.slice(0, cut) : full).replace(/[?.,;:!\s]+$/g, "").replace(/[=\r\n]+/g, " ").slice(0, 300);
+  const head = cleanYemotText(cut > 0 ? full.slice(0, cut) : full, 300);
   const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
   await doStateFetch(env, "pend_" + normalizeIsraelPhone(callerPhone), "PUT", pend);
 await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
@@ -3415,8 +3436,14 @@ function effectiveTextIfAny(t) {
 }
 __name(effectiveTextIfAny, "effectiveTextIfAny");
 __name2(effectiveTextIfAny, "effectiveTextIfAny");
+function cleanYemotText(text, cap) {
+  return String(text || "").replace(/[\r\n]+/g, " ").replace(/(\d)\.(?=\d)/g, "$1 \u05E0\u05E7\u05D5\u05D3\u05D4 ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/<\/?think>/gi, "").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, cap || 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
+}
+__name(cleanYemotText, "cleanYemotText");
+__name2(cleanYemotText, "cleanYemotText");
+__name22(cleanYemotText, "cleanYemotText");
 function speak(text, cap) {
-  const clean = String(text || "").replace(/[\r\n]+/g, " ").replace(/(\d)\.(?=\d)/g, "$1 \u05E0\u05E7\u05D5\u05D3\u05D4 ").replace(/[.\u2024\u2026]+/g, ", ").replace(/[-\u2010-\u2015]+/g, " ").replace(/[&=#%+:]/g, " ").replace(/[^a-zA-Z0-9\u0590-\u05FF\s,?!]/g, "").replace(/\s+/g, " ").replace(/,+/g, ",").substring(0, cap || 450).trim().replace(/^[,;!?\s]+|[,;:\s]+$/g, "");
+  const clean = cleanYemotText(text, cap);
   if (!clean) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05EA\u05E7\u05D1\u05DC\u05D4 \u05EA\u05E9\u05D5\u05D1\u05D4 \u05EA\u05E7\u05D9\u05E0\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
   return textResponse(`id_list_message=t-${clean}`);
 }
@@ -3495,7 +3522,7 @@ __name(TLK_WHISPER_PROMPT, "TLK_WHISPER_PROMPT");
 async function tlkSay(env, text, readParams) {
   let body = "";
   const f = await ttsTextToYemotFile(env, text);
-  body = f ? "id_list_message=f-" + f : "id_list_message=t-" + text;
+  body = f ? "id_list_message=f-" + f : "id_list_message=t-" + cleanYemotText(text, 450);
   if (readParams) body += "&read=" + readParams;
   return new Response(body, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }
