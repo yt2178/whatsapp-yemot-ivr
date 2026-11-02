@@ -764,10 +764,19 @@ var worker_default = {
           const lastTurn = Number(lastTurnRaw || 0);
           midCall = Boolean(lastTurn && Date.now() - lastTurn < 3 * 6e4);
         } catch (_) {}
+        let waits = 0;
+        try { const ws = (await doStateFetch(env, "waiting_" + callerPhone, "GET"))?.value; waits = Number((ws && ws.n) || 0); } catch (_) {}
+        if (midCall && waits < 4) {
+          try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: waits + 1, at: Date.now() }); } catch (_) {}
+          logEvent("newflow_wait_recording", { wait: waits + 1, caller: callerTail(callerPhone) });
+          return textResponse(waits === 0 ? "id_list_message=t-\u05E8\u05D2\u05E2&go_to_folder=/3" : "go_to_folder=/3");
+        }
+        try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
         const msg = midCall ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
+      try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
       rawPath = nf;
     }
     try {
@@ -1626,10 +1635,10 @@ function parseYemotDate(str) {
 __name(parseYemotDate, "parseYemotDate");
 __name2(parseYemotDate, "parseYemotDate");
 async function findNewestRecording(env, callerPhone) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     const found = await findNewestRecordingOnce(env, callerPhone);
     if (found) return found;
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 800));
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 1100));
   }
   return null;
 }
