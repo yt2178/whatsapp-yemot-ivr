@@ -62,7 +62,7 @@ function needsWebSearch(text) {
   if (clock && !explicit) return false;
   const liveSources = /(?:שער|דולר|אירו|מטבע|חליפין|מזג|אוויר|טמפרטורה|ביטק|חמרון)/;
   if (liveSources.test(q) && !explicit) return false;
-  const newsy = /(?:אתמול|מחר|השבוע|החודש|מה קרה|קרה משהו|מי ניצח|ניצחה|הפסיד|הפסידה|מתי מתחיל|מספר טלפון|טלפון של|כתובת של|שעות פתיחה|פתוח היום|סגור היום|הפוגה|מבצע צבאי|מלחמה|רקטות|טילים|פיגוע|בחירות|ממשלה|ראש הממשלה|כמה עולה|תוצאות|משחק|ליגה|שיעור|מדד|בורסה|מניה|קריפטו)/.test(q);
+  const newsy = /(?:אתמול|מחר|השבוע|החודש|מה קרה|קרה משהו|מי ניצח|ניצחה|הפסיד|הפסידה|מתי מתחיל|מספר טלפון|טלפון של|המספר של|מספר של|טלפון|כתובת של|שעות פתיחה|פתוח היום|סגור היום|הפוגה|מבצע צבאי|מלחמה|רקטות|טילים|פיגוע|בחירות|ממשלה|ראש הממשלה|כמה עולה|תוצאות|משחק|ליגה|שיעור|מדד|בורסה|מניה|קריפטו)/.test(q);
   return explicit || newsy || /(?:היום|עכשיו|כרגע|עדכני|עדכנית|חדשות|מחיר|שער|דולר|אירו|מזג|תוצאה|לוח זמנים|טיסה|רכבת|אוטובוס)/.test(q);
 }
 __name(needsWebSearch, "needsWebSearch");
@@ -461,6 +461,7 @@ var worker_default = {
       const __url = new URL(request.url);
       const __phone = __url.searchParams.get("ApiPhone") || "";
       if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
+        try { await env.USER_MEMORY.put("lastturn_" + __phone, String(Date.now()), { expirationTtl: 3600 }); } catch (_) {}
         let __converted = null;
         try {
           const __raw = await __res.clone().text();
@@ -759,8 +760,9 @@ var worker_default = {
       if (!nf) {
         let midCall = false;
         try {
-          const lastRec = (await doStateFetch(env, "reclast_" + callerPhone, "GET"))?.value;
-          midCall = Boolean(lastRec && lastRec.ts && Date.now() - lastRec.ts < 20 * 6e4);
+          const lastTurnRaw = await env.USER_MEMORY.get("lastturn_" + callerPhone);
+          const lastTurn = Number(lastTurnRaw || 0);
+          midCall = Boolean(lastTurn && Date.now() - lastTurn < 3 * 6e4);
         } catch (_) {}
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
         const msg = midCall ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
@@ -1359,43 +1361,10 @@ var worker_default = {
       let aiAnswer = "";
       let webVerified = !useWebSearch;
       if (useWebSearch) {
-        const searchModels = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"];
-        for (const webMdl of searchModels) {
-          try {
-            const response = await fetch("https://api.groq.com/openai/v1/responses", {
-              method: "POST",
-              headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model: webMdl,
-instructions: `${systemPrompt}
-\u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05DC\u05E4\u05E0\u05D9 \u05D4\u05EA\u05E9\u05D5\u05D1\u05D4. \u05E2\u05E0\u05D4 \u05E8\u05E7 \u05DC\u05E4\u05D9 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA \u05E9\u05DE\u05E6\u05D0\u05EA; \u05D0\u05DD \u05DC\u05D0 \u05E0\u05DE\u05E6\u05D0\u05D5 \u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05E9\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9.`,
-                              input: convoCtx + webQuery,
-                tools: [{ type: "browser_search" }],
-                tool_choice: "required",
-                max_output_tokens: 300
-              })
-            });
-            if (response.ok) {
-              const result = await response.json();
-              const candAnswer = responsesOutputText(result);
-              const candVerified = responsesUsedBrowserSearch(result);
-              if (candAnswer && candVerified) {
-                aiAnswer = candAnswer;
-                webVerified = true;
-                logEvent("web_search_verified", { source: "groq_browser_search", model: webMdl });
-                break;
-              }
-              logEvent("web_search_unverified", { model: webMdl, hasAnswer: Boolean(candAnswer), usedSearch: candVerified });
-              if (candAnswer) { aiAnswer = candAnswer; webVerified = false; }
-            } else {
-              logEvent("web_search_failed", { model: webMdl, status: response.status });
-              if (response.status === 429) await new Promise(function(r4) { setTimeout(r4, 15000); });
-            }
-          } catch (e) {
-            logEvent("web_search_error", { model: webMdl, type: e?.name || "Error" });
-          }
-        }
-      } else {
+        const webAns = await searchWebBudgeted(env, GROQ_KEY, convoCtx + webQuery, `${systemPrompt}\n\u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05D5\u05E2\u05E0\u05D4 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D1\u05E7\u05E6\u05E8\u05D4, \u05E2\u05D3 \u05E9\u05DC\u05D5\u05E9 \u05DE\u05E9\u05E4\u05D8\u05D9\u05DD. \u05D0\u05DD \u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA, \u05D0\u05DE\u05D5\u05E8 \u05D1\u05E4\u05E9\u05D8\u05D5\u05EA \u05E9\u05DC\u05D0 \u05DE\u05E6\u05D0\u05EA.`);
+        if (webAns) { aiAnswer = webAns; webVerified = true; logEvent("web_search_verified", { source: "budgeted" }); }
+      }
+      if (!aiAnswer || !String(aiAnswer).trim()) {
         const models = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"];
         for (const mdl of models) {
           try {
@@ -1408,7 +1377,7 @@ instructions: `${systemPrompt}
               const completion = await chatRes.json();
               aiAnswer = completion.choices?.[0]?.message?.content || "";
               if (aiAnswer.trim()) {
-                logEvent("model_answered", { model: mdl, webSearch: false, webVerified: true });
+                logEvent("model_answered", { model: mdl, webSearch: useWebSearch, webVerified });
                 break;
               }
             }
@@ -1418,13 +1387,7 @@ instructions: `${systemPrompt}
           }
         }
       }
-      if (!useWebSearch && /(?:\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D0\u05DE\u05EA|\u05D0\u05D9\u05DF \u05DC\u05D9 \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9|\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05D0\u05DE\u05EA|\u05EA\u05E0\u05E1\u05D4 \u05DC\u05D7\u05E4\u05E9|\u05D0\u05E4\u05E9\u05E8 \u05DC\u05E0\u05E1\u05D5\u05EA \u05DC\u05D7\u05E4\u05E9|\u05DC\u05D7\u05E4\u05E9 \u05D1\u05D2\u05D5\u05D2\u05DC)/.test(String(aiAnswer || ""))) {
-        try {
-          const retryRes = await fetch("https://api.groq.com/openai/v1/responses", { method: "POST", headers: { "Authorization": `Bearer ${GROQ_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-oss-120b", instructions: `${systemPrompt}\n\u05D6\u05D5 \u05E9\u05D0\u05DC\u05D4 \u05E9\u05D3\u05D5\u05E8\u05E9\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9. \u05D7\u05E4\u05E9 \u05D1\u05E8\u05E9\u05EA \u05D5\u05E2\u05E0\u05D4 \u05DE\u05D4\u05DE\u05E7\u05D5\u05E8\u05D5\u05EA, \u05D1\u05E7\u05E6\u05E8\u05D4.`, input: convoCtx + webQuery, tools: [{ type: "browser_search" }], tool_choice: "required", max_output_tokens: 300 }) });
-          if (retryRes.ok) { const retryJson = await retryRes.json(); const retryAns = responsesOutputText(retryJson); if (retryAns && responsesUsedBrowserSearch(retryJson)) { aiAnswer = retryAns; webVerified = true; logEvent("web_search_retry_ok", {}); } }
-        } catch (_) {}
-      }
-      if (useWebSearch && !webVerified) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D0\u05DE\u05EA \u05DE\u05D9\u05D3\u05E2 \u05E2\u05D3\u05DB\u05E0\u05D9 \u05D1\u05E8\u05E9\u05EA, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05DB\u05DE\u05D4 \u05D3\u05E7\u05D5\u05EA");
+      if (useWebSearch && !webVerified && !String(aiAnswer || "").trim()) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05DE\u05E6\u05D5\u05D0 \u05DE\u05D9\u05D3\u05E2 \u05E2\u05DB\u05E9\u05D9\u05D5, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05D7\u05E6\u05D9 \u05D3\u05E7\u05D4");
       if (!aiAnswer.trim()) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05D1\u05E6\u05E2 \u05D0\u05EA \u05D4\u05D1\u05E7\u05E9\u05D4 \u05DB\u05E8\u05D2\u05E2, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05E8\u05D2\u05E2");
       logEvent("answer_ready", { chars: aiAnswer.length });
       if (callerPhone && env.USER_MEMORY) {
@@ -1675,9 +1638,14 @@ async function findNewestRecordingOnce(env, callerPhone) {
     const res = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${env.YEMOT_TOKEN || ""}&path=ivr2:3/r`, { headers: { "User-Agent": "Mozilla/5.0" } });
     if (!res.ok) return null;
     const j = await res.json().catch(() => null);
-    const files = ((j && j.files) || []).filter((f) => /^(\d+)\.wav$/.test(String(f.name || "")));
+    const files = ((j && j.files) || []).filter((f) => /\.wav$/.test(String(f.name || "")) && !String(f.name || "").startsWith("~"));
     if (!files.length) return null;
-    files.sort((a, b) => parseInt(b.name) - parseInt(a.name));
+    files.sort((a, b) => {
+      const ta = parseYemotDate(a.date || a.mtime) || 0;
+      const tb = parseYemotDate(b.date || b.mtime) || 0;
+      if (tb !== ta) return tb - ta;
+      return (parseInt(b.name) || 0) - (parseInt(a.name) || 0);
+    });
     const f = files[0];
     const st = (await doStateFetch(env, "reclast_" + callerPhone, "GET"))?.value || null;
     if (st && st.file === f.name) return null;
@@ -1692,6 +1660,67 @@ async function findNewestRecordingOnce(env, callerPhone) {
 }
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
+async function kvGetJson(env, key) {
+  try { const raw = await env.USER_MEMORY.get(key); return raw ? JSON.parse(raw) : null; } catch (_) { return null; }
+}
+__name(kvGetJson, "kvGetJson");
+async function kvPutJson(env, key, val, ttl) {
+  try { await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: ttl || 3600 }); } catch (_) {}
+}
+__name(kvPutJson, "kvPutJson");
+async function searchWebBudgeted(env, GROQ_KEY, query, instructions) {
+  try {
+    const qn = String(query || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 120);
+    if (!qn) return null;
+    const cacheKey = "webcache_" + qn.replace(/[^a-z0-9\u0590-\u05FF]+/gi, "_").slice(0, 80);
+    const cached = await kvGetJson(env, cacheKey);
+    if (cached && cached.a && Date.now() - (cached.at || 0) < 15 * 6e4) { logEvent("web_cache_hit", {}); return cached.a; }
+    const budget = await kvGetJson(env, "web_budget");
+    if (budget && budget.at && Date.now() - budget.at < 50000) { logEvent("web_budget_skip", { ago: Math.round((Date.now() - budget.at) / 1000) }); return null; }
+    await kvPutJson(env, "web_budget", { at: Date.now() }, 3600);
+    const startedAt = Date.now();
+    for (const model of ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]) {
+      if (Date.now() - startedAt > 24000) break;
+      let attempt = 0;
+      while (attempt < 2) {
+        attempt++;
+        try {
+          const res = await fetch("https://api.groq.com/openai/v1/responses", {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + GROQ_KEY, "Content-Type": "application/json" },
+            body: JSON.stringify({ model, instructions, input: query, tools: [{ type: "browser_search" }], tool_choice: "required", max_output_tokens: 220 }),
+            signal: AbortSignal.timeout(20000)
+          });
+          if (res.ok) {
+            const j = await res.json();
+            const ans = responsesOutputText(j);
+            if (ans && responsesUsedBrowserSearch(j)) {
+              await kvPutJson(env, cacheKey, { a: ans, at: Date.now() }, 1200);
+              logEvent("web_search_ok", { model });
+              return ans;
+            }
+            logEvent("web_search_unverified", { model });
+            return null;
+          }
+          logEvent("web_search_fail", { model, status: res.status });
+          if (res.status === 429 && attempt === 1) {
+            const rt = String(res.headers.get("x-ratelimit-reset-tokens") || "");
+            const m = rt.match(/([\d.]+)s/);
+            const waitMs = m ? Math.min(Number(m[1]) * 1000 + 400, 8000) : 4000;
+            await new Promise((r) => setTimeout(r, waitMs));
+            continue;
+          }
+          break;
+        } catch (e) {
+          logEvent("web_search_err", { model, type: e?.name || "Error" });
+          break;
+        }
+      }
+    }
+    return null;
+  } catch (_) { return null; }
+}
+__name(searchWebBudgeted, "searchWebBudgeted");
 function newsNormTitle(t) {
   return String(t || "").toLowerCase().replace(/["'׳״.,:;!?()\[\]\-–—|/\\]/g, " ").replace(/\s+/g, " ").trim();
 }
