@@ -484,6 +484,10 @@ var worker_default = {
             const __mainFile = await ttsTextToYemotFile(env, __m[1]);
             if (__mainFile) {
               __parts.push("id_list_message=f-" + __mainFile);
+              const __toRecord = (__m[3] === "go_to_folder" && String(__m[4] || "").includes("/3/r")) || __m[3] === void 0;
+              if (__toRecord) {
+                __parts[0] = __parts[0] + ".f-/9/r/beep";
+              }
 
               if (__m[3] === "go_to_folder") {
                 __parts.push("go_to_folder=" + __m[4]);
@@ -787,8 +791,7 @@ var worker_default = {
           const pf = await ttsTextToYemotFile(env, msg);
           if (pf) { cachedPrompt = { f: pf, at: Date.now() }; await kvPutJson(env, "ttsfile2_" + promptKind, cachedPrompt, 2592000); }
         }
-        if (promptKind === "greet") return textResponse("go_to_folder=/3/r");
-        if (cachedPrompt && cachedPrompt.f) return textResponse(`id_list_message=f-${cachedPrompt.f}&go_to_folder=/3/r`);
+        if (cachedPrompt && cachedPrompt.f) return textResponse(`id_list_message=f-${cachedPrompt.f}.f-/9/r/beep&go_to_folder=/3/r`);
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
       try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
@@ -1497,7 +1500,7 @@ function accountReadPrompt(pend) {
   const isSend = pend.verb === "שליחה";
   const v1 = isSend ? (isChat ? "לשליחת הודעת הצאט מ" : "לשליחת המייל מ") : isChat ? "לבדיקת הודעות הצאט ב" : "לבדיקת המיילים ב";
   const question = v1 + "החשבון וואי אפס חמש אפס הקש אחת, " + v1 + "החשבון וואי טי אפס חמש שלוש הקש שתיים";
-  return textResponse(`read=t-${question}=account,no,1,1,15,Digits,yes,yes,,,,,None,`);
+  return textResponse(`read=t-${question}=account,no,1,1,15,Digits,yes,no,,,,,None,`);
 }
 __name(accountReadPrompt, "accountReadPrompt");
 __name2(accountReadPrompt, "accountReadPrompt");
