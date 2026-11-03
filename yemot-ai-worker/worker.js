@@ -462,6 +462,12 @@ var worker_default = {
       const __phone = __url.searchParams.get("ApiPhone") || "";
       if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
         try { await env.USER_MEMORY.put("lastturn_" + __phone, String(Date.now()), { expirationTtl: 3600 }); } catch (_) {}
+        try {
+          const __cloneForKind = __res.clone();
+          const __b = await __cloneForKind.text();
+          const __kind = __b.includes("go_to_folder=/3/r") ? "record" : (__b.includes("go_to_folder=/3") ? "recheck" : "other");
+          await doStateFetch(env, "lastresp_" + __phone, "PUT", { kind: __kind, at: Date.now() });
+        } catch (_) {}
         let __converted = null;
         try {
           const __raw = await __res.clone().text();
@@ -764,16 +770,11 @@ var worker_default = {
           const lastTurn = Number(lastTurnRaw || 0);
           midCall = Boolean(lastTurn && Date.now() - lastTurn < 3 * 6e4);
         } catch (_) {}
-        let waits = 0;
-        try { const ws = (await doStateFetch(env, "waiting_" + callerPhone, "GET"))?.value; waits = Number((ws && ws.n) || 0); } catch (_) {}
-        if (midCall && waits < 2) {
-          try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: waits + 1, at: Date.now() }); } catch (_) {}
-          logEvent("newflow_wait_recording", { wait: waits + 1, caller: callerTail(callerPhone) });
-          return textResponse(waits === 0 ? "id_list_message=t-\u05E8\u05D2\u05E2&go_to_folder=/3" : "go_to_folder=/3");
-        }
-        try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
+        let lastResp = null;
+        try { lastResp = (await doStateFetch(env, "lastresp_" + callerPhone, "GET"))?.value; } catch (_) {}
+        const wasRecordPrompt = Boolean(lastResp && lastResp.kind === "record" && Date.now() - (lastResp.at || 0) < 4 * 6e4);
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
-        const msg = midCall ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA. \u05D3\u05D1\u05E8\u05D5 \u05DE\u05D9\u05D3 \u05D0\u05D7\u05E8\u05D9 \u05D4\u05E6\u05DC\u05D9\u05DC, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
+        const msg = (midCall || wasRecordPrompt) ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA. \u05D3\u05D1\u05E8\u05D5 \u05DE\u05D9\u05D3 \u05D0\u05D7\u05E8\u05D9 \u05D4\u05E6\u05DC\u05D9\u05DC, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
       try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
