@@ -446,8 +446,8 @@ async function cleanupOldTtsFiles(env) {
     for (const f of files) {
       let protectedNames = [];
       try {
-        const pg = await kvGetJson(env, "ttsfile_greet");
-        const pn = await kvGetJson(env, "ttsfile_notheard");
+        const pg = await kvGetJson(env, "ttsfile2_greet");
+        const pn = await kvGetJson(env, "ttsfile2_notheard");
         protectedNames = [pg && pg.f, pn && pn.f].filter(Boolean).map((x) => String(x).split("/").pop());
       } catch (_) {}
       if (protectedNames.includes(String(f.name || "").replace(/\.wav$/, ""))) continue;
@@ -484,10 +484,7 @@ var worker_default = {
             const __mainFile = await ttsTextToYemotFile(env, __m[1]);
             if (__mainFile) {
               __parts.push("id_list_message=f-" + __mainFile);
-              const __toRecord = (__m[3] === "go_to_folder" && String(__m[4] || "").includes("/3/r")) || __m[3] === void 0;
-              if (__toRecord) {
-                __parts[0] = __parts[0] + ".f-/9/r/beep";
-              }
+
               if (__m[3] === "go_to_folder") {
                 __parts.push("go_to_folder=" + __m[4]);
               } else if (__m[3] !== void 0) {
@@ -786,14 +783,14 @@ var worker_default = {
         } catch (_) {}
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
         const promptKind = (midCall || wasRecordPrompt) ? "notheard" : "greet";
-        const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA. \u05D3\u05D1\u05E8\u05D5 \u05DE\u05D9\u05D3 \u05D0\u05D7\u05E8\u05D9 \u05D4\u05E6\u05DC\u05D9\u05DC, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD, \u05D0\u05DE\u05E8\u05D5 \u05D0\u05EA \u05E9\u05D0\u05DC\u05EA\u05DB\u05DD, \u05D5\u05DB\u05E9\u05EA\u05E1\u05D9\u05D9\u05DE\u05D5 \u05E4\u05E9\u05D5\u05D8 \u05EA\u05E9\u05EA\u05E7\u05D5 \u05E9\u05EA\u05D9 \u05E9\u05E0\u05D9\u05D5\u05EA";
+        const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD";
         let cachedPrompt = null;
-        try { cachedPrompt = await kvGetJson(env, "ttsfile_" + promptKind); } catch (_) {}
+        try { cachedPrompt = await kvGetJson(env, "ttsfile2_" + promptKind); } catch (_) {}
         if (!cachedPrompt || !cachedPrompt.f) {
           const pf = await ttsTextToYemotFile(env, msg);
-          if (pf) { cachedPrompt = { f: pf, at: Date.now() }; await kvPutJson(env, "ttsfile_" + promptKind, cachedPrompt, 2592000); }
+          if (pf) { cachedPrompt = { f: pf, at: Date.now() }; await kvPutJson(env, "ttsfile2_" + promptKind, cachedPrompt, 2592000); }
         }
-        if (cachedPrompt && cachedPrompt.f) return textResponse(`id_list_message=f-${cachedPrompt.f}.f-/9/r/beep&go_to_folder=/3/r`);
+        if (cachedPrompt && cachedPrompt.f) return textResponse(`id_list_message=f-${cachedPrompt.f}&go_to_folder=/3/r`);
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
       try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
