@@ -1470,7 +1470,7 @@ function callerTail(phone) {
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
 __name22(callerTail, "callerTail");
-var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycby8IpHtoJGHz2zFOxzP1PrsckyYdmdGIvSkW6iCutLi4GyCnaB34xVfCMAnbuKp5cekjg/exec", 2: "https://script.google.com/macros/s/AKfycbwX4_sE_utQvSaU8_WarCw9BtZWXBfe0s6ZnM2Cdl7rtNfKiwB3GoskFAp9Uqugk7w47A/exec" };
+var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycbwpop3zOEViAm5Lb0-A1o-P3-s0EveloHVZR2bntVL0i0sByFiEll8SH9m_iRQb2ctTqQ/exec", 2: "https://script.google.com/macros/s/AKfycbwX4_sE_utQvSaU8_WarCw9BtZWXBfe0s6ZnM2Cdl7rtNfKiwB3GoskFAp9Uqugk7w47A/exec" };
 function detectAccount(text) {
   const t = String(text || "").replace(/\s+/g, " ");
   if (/(?:חשבון|תיבה)\s*(?:ה)?(?:שניים|שניה|שני|שתיים|2)/.test(t)) return 2;
