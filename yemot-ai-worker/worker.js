@@ -473,7 +473,7 @@ var worker_default = {
           const __cloneForKind = __res.clone();
           const __b = await __cloneForKind.text();
           const __kind = __b.includes("go_to_folder=/3/r") ? "record" : (__b.includes("go_to_folder=/3") ? "recheck" : "other");
-          await doStateFetch(env, "lastresp_" + __phone, "PUT", { kind: __kind, at: Date.now() });
+          await doStateFetch(env, "lastresp_" + __phone, "PUT", { kind: __kind, at: Date.now(), callId: String(new URL(__url.toString()).searchParams.get("ApiCallId") || "") });
         } catch (_) {}
         let __converted = null;
         try {
@@ -772,24 +772,22 @@ var worker_default = {
     if (!rawPath || !rawPath.trim()) {
       let lastResp = null;
       try { lastResp = (await doStateFetch(env, "lastresp_" + callerPhone, "GET"))?.value; } catch (_) {}
-      const wasRecordPrompt = Boolean(lastResp && lastResp.kind === "record" && Date.now() - (lastResp.at || 0) < 4 * 6e4);
+      const curCallId = String(params.ApiCallId || "");
+      const sameCall = Boolean(lastResp && lastResp.callId && curCallId && lastResp.callId === curCallId);
+      const wasRecordPrompt = Boolean(lastResp && lastResp.kind === "record" && sameCall);
       const nf = wasRecordPrompt ? await findNewestRecording(env, callerPhone, false) : null;
       if (!nf) {
-        let midCall = false;
-        try {
-          const lastTurnRaw = await env.USER_MEMORY.get("lastturn_" + callerPhone);
-          const lastTurn = Number(lastTurnRaw || 0);
-          midCall = Boolean(lastTurn && Date.now() - lastTurn < 3 * 6e4);
-        } catch (_) {}
+        const midCall = sameCall;
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
         const promptKind = (midCall || wasRecordPrompt) ? "notheard" : "greet";
-        const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA" : "\u05E9\u05DC\u05D5\u05DD, \u05D6\u05D4 \u05D4\u05E2\u05D5\u05D6\u05E8 \u05D4\u05D7\u05DB\u05DD";
+        const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA" : "\u05E9\u05DC\u05D5\u05DD";
         let cachedPrompt = null;
         try { cachedPrompt = await kvGetJson(env, "ttsfile2_" + promptKind); } catch (_) {}
         if (!cachedPrompt || !cachedPrompt.f) {
           const pf = await ttsTextToYemotFile(env, msg);
           if (pf) { cachedPrompt = { f: pf, at: Date.now() }; await kvPutJson(env, "ttsfile2_" + promptKind, cachedPrompt, 2592000); }
         }
+        if (promptKind === "greet") return textResponse("go_to_folder=/3/r");
         if (cachedPrompt && cachedPrompt.f) return textResponse(`id_list_message=f-${cachedPrompt.f}&go_to_folder=/3/r`);
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
