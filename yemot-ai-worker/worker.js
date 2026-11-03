@@ -2407,7 +2407,8 @@ function resolveContinuation(cont, reply, allContacts) {
   const glued = text.replace(/\s+/g, "");
   const clockQ = /(?:מההשעה|מהשעה|השעהעכשיו|מההתאריך|מהתאריך|איזהתאריך|התאריךהיום|תאריךעברי|איזהיוםהיום|איזהיום|מהיום)/.test(glued) || /(?:מה השעה|מה שעה|השעה עכשיו|מה התאריך|מה תאריך|איזה תאריך|התאריך היום|תאריך עברי|איזה יום היום|איזה יום)/.test(text);
   if (cont.kind === "mailrange") {
-    if (/(?:^|\s)(?:ב?ה?יום|ב?ה?אתמול|ב?ה?יממה|ב?ה?ימום|ב?ה?יוממה)(?![\u05D0-\u05EA])/.test(text) || /(?:יום|יממה|ימום)\s*ה?א?ח\s?רונ/.test(text)) return { status: "resolved", timeframe: "day" };
+    const gluedDay = text.replace(/\s+/g, "");
+    if (/(?:^|\s)(?:ב?[המ]?ה?יום|ב?[המ]?ה?אתמול|ב?[המ]?ה?יממה|ב?[המ]?ה?ימום|ב?[המ]?ה?יוממה)(?![\u05D0-\u05EA])/.test(text) || /(?:יום|יממה|ימום)\s*ה?א?ח\s?רונ/.test(text) || /(?:מהיום|היום|היממה|24שעות|עשריםוארבעשעות)/.test(gluedDay)) return { status: "resolved", timeframe: "day" };
     if (/(?:^|\s)ב?(?:שבו[לער]|שבועות|שבולים)/.test(text)) return { status: "resolved", timeframe: "week" };
     if (/(?:^|\s)ב?(?:חוד[שס]|חודשיים)/.test(text)) return { status: "resolved", timeframe: "month" };
     if (/(?:^|\s)(?:ב?ה?כל|הכול|(?:ב?כל\s*)?הזמנים)(?![\u05D0-\u05EA])/.test(text)) return { status: "resolved", timeframe: "all" };
@@ -3084,7 +3085,8 @@ async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timef
     const q = [unread ? "is:unread" : "", rangeQ].filter(Boolean).join(" ") || "in:inbox";
     const messages = [];
     let pageToken = null;
-    for (let i = 0; i < 5; i++) {
+    const maxPages = timeframe === "day" ? 2 : timeframe === "week" ? 3 : 5;
+    for (let i = 0; i < maxPages; i++) {
       const payload = { action: "search", query: q, max: 10 };
       if (pageToken) payload.pageToken = pageToken;
       const data = await callBridge(env, payload, account);
@@ -3099,8 +3101,16 @@ async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timef
     await kvSetList(env, "lastlist_" + callerPhone, { messages: messages.slice(0, 10), ts: Date.now(), account });
     const rangeTxt = timeframe === "day" ? "ביממה האחרונה" : timeframe === "week" ? "בשבוע האחרון" : timeframe === "month" ? "בחודש האחרון" : "";
     if (!messages.length) return speak(unread ? "אין מיילים שלא נקראו" : `אין מיילים חדשים ${rangeTxt}`);
-    const items = messages.slice(0, 50).map((m, i) => ({ n: i + 1, from: cleanFromName(m.from), address: m.from, subject: String(m.subject || "").slice(0, 80), snippet: String(m.snippet || "").slice(0, 100) }));
-    const sumPrompt = "אתה עוזר קולי בעברית בטלפון. קיבלת רשימת מיילים ממוינת מהחדש לישן. תסכם אותה למאזין בעברית מדוברת לפי הכללים: מיילים מאנשים פרטיים או גופים חשובים הזכר בשם השולח ובנושא ואמור אם חשוב. התראות אוטומטיות, ניוזלטרים, פרסומות ומיילים מתמיכה של חברות קבץ יחד בקצרה, למשל שתי התראות אבטחה מגוגל. אל תקריא את כל הרשימה אם היא ארוכה, סכם בכמה משפטים. כתוב בעברית בלי נקודות ובלי מקפים ובלי פסיקים כפולים. אם מייל נראה דחוף או חשוב במיוחד, הדגש זאת תחילה. הרשימה: " + JSON.stringify(items);
+    const grouped = new Map();
+    for (const m of messages) {
+      const key = (String(m.subject || "").replace(/\s+/g, " ").trim().toLowerCase() || String(m.from || "")).slice(0, 60);
+      const g = grouped.get(key);
+      if (g) { g.count += 1; } else { grouped.set(key, { m, count: 1 }); }
+    }
+    const dedup = Array.from(grouped.values());
+    logEvent("digest_grouped", { total: messages.length, groups: dedup.length, account });
+    const items = dedup.map((g, i) => ({ n: i + 1, from: cleanFromName(g.m.from), address: g.m.from, subject: String(g.m.subject || "").slice(0, 80), count: g.count, snippet: String(g.m.snippet || "").slice(0, 100) }));
+    const sumPrompt = "אתה עוזר קולי בעברית בטלפון. קיבלת רשימת מיילים ממוינת מהחדש לישן. תסכם אותה למאזין בעברית מדוברת לפי הכללים: מיילים מאנשים פרטיים או גופים חשובים הזכר בשם השולח ובנושא ואמור אם חשוב. התראות אוטומטיות, ניוזלטרים, פרסומות ומיילים מתמיכה של חברות קבץ יחד בקצרה, למשל שתי התראות אבטחה מגוגל. אל תקריא את כל הרשימה אם היא ארוכה, סכם בכמה משפטים. כתוב בעברית בלי נקודות ובלי מקפים ובלי פסיקים כפולים. אם מייל נראה דחוף או חשוב במיוחד, הדגש זאת תחילה. שדה count אומר כמה מיילים זהים יש עם אותו נושא — הזכר אותם פעם אחת בלבד ואמור כמה כאלה יש. הרשימה: " + JSON.stringify(items);
     const ans = await groqChatShort(GROQ_KEY, sumPrompt, "סכם את המיילים", 700);
     const totalTxt = messages.length >= 50 ? "יותר מחמישים" : String(messages.length);
     const prefix = unread ? "בדקתי את המיילים שלא נקראו" : `בדקתי את המיילים ${rangeTxt}`;
