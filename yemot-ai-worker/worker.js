@@ -730,6 +730,19 @@ var worker_default = {
       logEvent("stale_confirm_with_recording", { caller: callerTail(callerPhone) });
     }
     let preferredAccount = null;
+    if (params.mrng !== void 0 && callerPhone) {
+      try {
+        const contM = await kvGetList(env, contStateKey(callerPhone));
+        const acct = Number((contM && contM.account) || 1) === 2 ? 2 : 1;
+        const map = { "1": "day", "2": "week", "3": "month", "4": "all" };
+        const tf = map[String(params.mrng).trim()];
+        logEvent("mailrange_dtmf", { key: String(params.mrng).slice(0, 2), timeframe: tf || "", account: acct, caller: callerTail(callerPhone) });
+        if (tf) {
+          await clearContState(env, callerPhone);
+          return await emailDigest(env, env.GROQ_KEY, callerPhone, makeRequestId(callerPhone, "dtmf"), acct, tf, false);
+        }
+      } catch (_) {}
+    }
     if (params.account !== void 0 && callerPhone) {
       const hasRecording = Boolean(params.link || params.file_path || params.RecordingPath || params.val || params["000"] || params["api_000"] || (typeof params.t === "string" && params.t.trim())) || Object.entries(params).some(([, v]) => typeof v === "string" && (v.includes(".wav") || v.includes(".opus")));
       if (hasRecording) {
@@ -864,7 +877,16 @@ var worker_default = {
         }
       }
 
+      const __rawWhisper = transcribedText;
       transcribedText = await correctTranscription(transcribedText);
+      try {
+        const __tlKey = "translog_" + callerPhone;
+        let __tlArr = [];
+        try { __tlArr = JSON.parse((await env.USER_MEMORY.get(__tlKey)) || "[]") || []; } catch (_) {}
+        __tlArr.unshift({ at: new Date().toISOString(), text: String(transcribedText).slice(0, 300), raw: String(__rawWhisper).slice(0, 300), path: String(p || "").slice(0, 60), sim: isSim });
+        if (__tlArr.length > 60) __tlArr = __tlArr.slice(0, 60);
+        await env.USER_MEMORY.put(__tlKey, JSON.stringify(__tlArr), { expirationTtl: 1209600 });
+      } catch (_) {}
       try {
         const acctKey = "acct_" + normalizeIsraelPhone(callerPhone);
         const pendWrap = await doStateFetch(env, acctKey, "GET");
@@ -906,8 +928,19 @@ var worker_default = {
           return speak("בכיף, במה עוד אפשר לעזור?");
         }
         if (contRes.status === "reask") {
+          if (cont.kind === "mailrange") {
+            const tfLLM = await classifyTimeframeLLM(GROQ_KEY, transcribedText);
+            if (tfLLM) {
+              logEvent("range_llm_resolved", { tf: tfLLM, caller: callerTail(callerPhone) });
+              if (!env.MAILBOX_PATH_SECRET || mailboxAuth !== env.MAILBOX_PATH_SECRET || normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) {
+                await clearContState(env, callerPhone);
+                return speak("אין הרשאה לביצוע הפעולה ממספר זה");
+              }
+              return await executeContinuation(env, cont, { status: "resolved", timeframe: tfLLM }, callerPhone, requestId);
+            }
+          }
           const asks = (cont.asks || 0) + 1;
-          if (asks >= 2) {
+          if (asks >= 3) {
             await clearContState(env, callerPhone);
             return speak("לא הבנתי, במה עוד אפשר לעזור?");
           }
@@ -1320,7 +1353,31 @@ var worker_default = {
           const _minP2 = minute === 15 ? " ורבע" : minute === 30 ? " וחצי" : minute > 0 ? " ו" + hebNumWords(minute) + " דקות" : "";
           return speak(`נשמרה תזכורת ל${(isTomorrow || _rolledFwd) ? "מחר" : "היום"} בשעה ${_hW2}${_tod2}${_minP2}: ${message}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
         }
-        const nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
+        const __nmGuard = /(?:מייל|מיילים|הודע|צאט|שלוחה|כותרת|תזכור|רשימה|בדיחה|מזג|השעה|שעה|תאריך|דולר|עברי|שלח)/.test(transcribedText);
+        if (!__nmGuard && callerPhone && env.USER_MEMORY) {
+          const __nameAsk = /(?:איך\s+קוראים\s+לי|איך\s+קוראים\s+ל\S*|מ[הו]\s+ה?שם\s+שלי|מ[הו]\s+השם\s+שמוכסן|מ[הו]\s+השם\s+שמור|מ[הו]\s+השם\s+שאתה\s+יודע|איך\s+נקראתי|מי\s+אני|מה\s+שמי|מה\s+השם\s+שלי)/.test(transcribedText) && !/(?:שנה|תשנה|עדכן|תעדכן|קרא|תקרא)/.test(transcribedText);
+          if (__nameAsk) {
+            const __nm = callerMemory || {};
+            if (__nm.name) return speak(`קוראים לך ${__nm.name}`);
+            return speak("לא שמרתי את שמך עדיין. תגיד קרא לי ואז השם שלך ואשמור אותו");
+          }
+          let __newName = null;
+          const __m1 = transcribedText.match(/(?:^|\s)(?:שנה|תשנה|עדכן|תעדכן)[^.;!?]*?(?:שם|לי)[^.;!?]*?(?:לשם|בשם|שמו|ל|:)\s*(?:הבא[\s:]+)?([\u0590-\u05FF]{2,15})(?:\s|$)/);
+          const __m2 = transcribedText.match(/(?:^|\s)(?:קרא|תקרא)\s+(?:לי|אותי)\s+([\u0590-\u05FF]{2,15})(?:\s|$)/);
+          const __m3 = transcribedText.match(/(?:^|\s)(?:שמי|קוראים לי)\s+([\u0590-\u05FF]{2,15})(?:\s|$)/);
+          const __cand = (__m1 && __m1[1]) || (__m2 && __m2[1]) || (__m3 && __m3[1]) || null;
+          const __badName = /^(?:רוצה|צריך|מבקש|שואל|חושב|אומר|מתכוון|מעוניין|פונה|מתקשר|מנסה|מדבר|מקווה|אוהב|שומע|רואה|הולך|יודע|מאמין|חוזר|נוסע|יושב|עומד|אוכל|שותה|ישן|מחפש|בודק|מחכה|לך|לי|אותי|עכשיו|שוב|בבקשה|תודה|כן|לא|זה|זאת|את|הבא)$/;
+          if (__cand && !__badName.test(__cand)) __newName = __cand;
+          if (__newName) {
+            const mem = callerMemory || {};
+            mem.name = __newName;
+            mem.lastSeen = now.toISOString();
+            await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
+            return speak(`שמרתי את שמך כ${__newName}. מעכשיו אדע שאתה ${__newName}`);
+          }
+        }
+        let nameMatch = transcribedText.match(/(?:שמי|קוראים לי|אני)\s+([\u0590-\u05FF]+)/);
+        if (nameMatch && /^(?:רוצה|צריך|מבקש|שואל|חושב|אומר|מתכוון|מעוניין|פונה|מתקשר|מנסה|מדבר|מקווה|אוהב|שומע|רואה|הולך|יודע|מאמין|חוזר|נוסע|יושב|עומד|אוכל|שותה|ישן|מחפש|בודק|מחכה)$/.test(nameMatch[1])) nameMatch = null;
         if (nameMatch && callerPhone && env.USER_MEMORY) {
           const newName = nameMatch[1];
           const mem = callerMemory || {};
@@ -2400,6 +2457,19 @@ function matchCandidatesAmong(candidates, reply) {
 __name(matchCandidatesAmong, "matchCandidatesAmong");
 __name2(matchCandidatesAmong, "matchCandidatesAmong");
 __name22(matchCandidatesAmong, "matchCandidatesAmong");
+async function classifyTimeframeLLM(GROQ_KEY, text) {
+  const t = String(text || "").trim();
+  if (!t || t.length > 300) return null;
+  try {
+    const ans = await groqChatShort(GROQ_KEY, 'אתה מסווג תשובה בעברית לשאלה "מתי לבדוק את המיילים?". שיבושי תמלול נפוצים, למשל "ביי ממש עונה" או "לממה אחרונה" או "בממחונה" הם בעצם "ביממה האחרונה" ולכן day. ענה במילה אחת בלבד באנגלית: day ליממה, יום, היום, אתמול או 24 שעות. week לשבוע. month לחודש. all לכל הזמנים או הכל. none אם אין קשר לזמן בדיקה.', t, 10);
+    const m = String(ans || "").toLowerCase().match(/(?:day|week|month|all|none)/);
+    if (!m || m[0] === "none") return null;
+    return m[0];
+  } catch (_) { return null; }
+}
+__name(classifyTimeframeLLM, "classifyTimeframeLLM");
+__name2(classifyTimeframeLLM, "classifyTimeframeLLM");
+__name22(classifyTimeframeLLM, "classifyTimeframeLLM");
 function resolveContinuation(cont, reply, allContacts) {
   const text = String(reply || "").trim();
   const words = text.split(/\s+/).filter(Boolean).length;
@@ -3066,9 +3136,9 @@ __name(handleConfirm, "handleConfirm");
 __name2(handleConfirm, "handleConfirm");
 __name22(handleConfirm, "handleConfirm");
 async function askMailRange(env, callerPhone, account) {
-  const q = "מתי לבדוק? ביממה האחרונה, בשבוע האחרון, בחודש האחרון, או בכל הזמנים?";
+  const q = "מתי לבדוק? ליממה האחרונה הקש אחת, לשבוע האחרון הקש שתיים, לחודש האחרון הקש שלוש, לכל הזמנים הקש ארבע";
   await setContState(env, callerPhone, { kind: "mailrange", account: account || 1, unread: false, question: q, ts: Date.now() });
-  return openQuestion(q);
+  return textResponse(`read=t-${q}=mrng,no,1,1,20,No,yes,no,,,,,None,`);
 }
 function openQuestion(text) {
   return textResponse(`id_list_message=t-${text}&go_to_folder=/3/r`);
@@ -3324,8 +3394,10 @@ function relTimeHeb(iso) {
 __name(relTimeHeb, "relTimeHeb");
 __name2(relTimeHeb, "relTimeHeb");
 async function chatRecentMessages(env, account, max) {
+  globalThis.__chatErr = "";
   try {
     const r = await callBridge(env, { action: "chat_search", query: "*", max: 25 }, account);
+    if (r && !r.ok) globalThis.__chatErr = String((r.error || "") + " " + (r.message || "bridge_error"));
     if (r && r.ok && Array.isArray(r.messages)) {
       const msgs = r.messages.filter((m) => m && m.text);
       if (msgs.length) {
@@ -3386,7 +3458,12 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
       const cnt = Math.min(parseInt(params.count) || 4, 5);
       const msgs = await chatRecentMessages(env, account, cnt);
       await kvSetList(env, listKey, { messages: msgs, ts: Date.now(), account });
-      if (!msgs.length) return speak("לא מצאתי הודעות בצאט");
+      if (!msgs.length) {
+        const ce = String(globalThis.__chatErr || "");
+        if (/has not been used in project|is disabled|chat\.googleapis/i.test(ce)) return speak("הצאט לא מופעל בחשבון הזה. צריך להפעיל בפרויקט של החשבון את שירות גוגל צאט");
+        if (/unreachable|Access Denied|403/i.test(ce)) return speak("אין חיבור פעיל לחשבון הזה. צריך לפרוס מחדש את הגשר לגוגל");
+        return speak("לא מצאתי הודעות בצאט");
+      }
       const latest = msgs[0];
       const top = `ההודעה האחרונה בצאט היא מאת ${cleanFromName(latest.sender || "לא ידוע")}, ${relTimeHeb(latest.createTime)}, תוכן: ${String(latest.text).slice(0, 120)}. `;
       return speak(top + fmtChatList(msgs));
