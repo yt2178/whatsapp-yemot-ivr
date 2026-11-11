@@ -3214,6 +3214,9 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     }
     if (!plan.action || plan.action === "none") {
       logEvent("email_plan_unclear", { caller: callerTail(callerPhone) });
+      if (/(?:\u05E9\u05DE\u05D5\u05E8|\u05EA\u05E9\u05DE\u05D5\u05E8|\u05DC\u05E9\u05DE\u05D5\u05E8).{0,12}\u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8|\u05D0\u05D9\u05E9 \u05E7\u05E9\u05E8 \u05D7\u05D3\u05E9/.test(transcribedText)) {
+        return await handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId, account);
+      }
       if (/(?:שלח|תשלח|שלוח|שליחה|העבר|תעביר)/.test(transcribedText)) return speak("אמור את כתובת המייל ואת תוכן ההודעה, למשל שלח מייל לכתובת, עם הודעה");
       await saveConvoTurn(env, transcribedText, "לא הבנתי איזו פעולת מייל ברצונך לבצע");
       return speak("לא הבנתי איזו פעולת מייל ברצונך לבצע");
