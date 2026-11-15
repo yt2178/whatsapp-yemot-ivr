@@ -440,7 +440,7 @@ async function cleanupOldTtsFiles(env) {
   try {
     const dirRes = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${YEMOT_TOKEN}&path=ivr2:9/r`);
     const dirData = await dirRes.json().catch(() => null);
-    const files = (dirData && dirData.dirDetails) || [];
+    const files = (dirData && (dirData.files || dirData.dirDetails)) || [];
     const cutoff = Date.now() - 108e5;
     const jobs = [];
     for (const f of files) {
@@ -489,7 +489,7 @@ var worker_default = {
               if (__m[3] === "go_to_folder") {
                 __parts.push("go_to_folder=" + __m[4]);
               } else if (__m[3] !== void 0) {
-                const __rm = __m[4].match(/^t-([^=]+)=((?:confirm|account),.*)$/);
+                const __rm = __m[4].match(/^t-([^=]+)=((?:confirm|account|mrng),.*)$/);
                 if (__rm) {
                   const __qFile = await ttsTextToYemotFile(env, __rm[1]);
                   if (__qFile) __parts.push("read=f-" + __qFile + "=" + __rm[2]);
@@ -503,7 +503,7 @@ var worker_default = {
               if (Math.random() < 0.25) ctx.waitUntil(cleanupOldTtsFiles(env));
             }
           } else {
-            const __ro = __raw.match(/^read=t-([^=]+)=((?:confirm|account|link),[\s\S]*)$/);
+            const __ro = __raw.match(/^read=t-([^=]+)=((?:confirm|account|link|mrng),[\s\S]*)$/);
             if (__ro) {
               const __qFile = await ttsTextToYemotFile(env, __ro[1]);
               if (__qFile) {
@@ -692,6 +692,26 @@ var worker_default = {
       if (k === "newsbuild") {
         const res = await buildNewsAudio(env);
         return Response.json(res);
+      }
+      if (k === "cleanup") {
+        await cleanupOldTtsFiles(env);
+        const chk = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${env.YEMOT_TOKEN || ""}&path=ivr2:9/r`).then((r) => r.json()).catch(() => null);
+        return Response.json({ ok: true, files: (chk && ((chk.files || chk.dirDetails || []).length)) || 0 });
+      }
+      if (k === "kv") {
+        const key = url.searchParams.get("key") || "";
+        if (!key) return Response.json({ error: "missing key" });
+        const v = await env.USER_MEMORY.get(key);
+        return Response.json({ key, value: v ? String(v) : null });
+      }
+      if (k === "kvset") {
+        const key = url.searchParams.get("key") || "";
+        let val = url.searchParams.get("v") || "";
+        if (!val && request.method === "POST") { try { val = await request.text(); } catch (_) {} }
+        if (!key) return Response.json({ error: "missing key" });
+        await env.USER_MEMORY.put(key, val);
+        try { await doStateFetch(env, key, "PUT", JSON.parse(val)); } catch (_) {}
+        return Response.json({ ok: true, key, len: val.length });
       }
       if (k === "tts") {
         const text = url.searchParams.get("text") || "";
@@ -1539,7 +1559,7 @@ function callerTail(phone) {
 __name(callerTail, "callerTail");
 __name2(callerTail, "callerTail");
 __name22(callerTail, "callerTail");
-var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycbwpop3zOEViAm5Lb0-A1o-P3-s0EveloHVZR2bntVL0i0sByFiEll8SH9m_iRQb2ctTqQ/exec", 2: "https://script.google.com/macros/s/AKfycbwX4_sE_utQvSaU8_WarCw9BtZWXBfe0s6ZnM2Cdl7rtNfKiwB3GoskFAp9Uqugk7w47A/exec" };
+var BRIDGE_URLS = { 1: "https://script.google.com/macros/s/AKfycbxVg--qDSymcalsp0OnxZ17hq_AkAxSGvXPlFXACNXxLsCXhpx9MHpkNLNxj9JOwE23kw/exec", 2: "https://script.google.com/macros/s/AKfycbwX4_sE_utQvSaU8_WarCw9BtZWXBfe0s6ZnM2Cdl7rtNfKiwB3GoskFAp9Uqugk7w47A/exec" };
 function detectAccount(text) {
   const t = String(text || "").replace(/\s+/g, " ");
   if (/(?:חשבון|תיבה)\s*(?:ה)?(?:שניים|שניה|שני|שתיים|2)/.test(t)) return 2;
