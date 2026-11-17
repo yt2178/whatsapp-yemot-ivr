@@ -1260,7 +1260,16 @@ var worker_default = {
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
       const chatWord = "(?:צ[׳'״\"]?[אע]?[טת]|ש[׳'״\"]?[אע][טת]|chat)(?:ים)?(?![א-ת])";
       const chatReadFollowUp = /(?:^|\s)(?:קרא|תקרא|הקרא|שמע|תשמע|השמע|קריאה)\s+(?:את\s+)?ה?הודע[הת](?![א-ת])/.test(effectiveText);
-      const chatIntent = new RegExp("(?:(?:גוגל|google|גוגול).{0,20}(?:" + chatWord + ")|(?:" + chatWord + ").{0,20}(?:גוגל|google|גוגול)|(?:^|[\\s,])[בהל]?(?:" + chatWord + ")|איש\\s+קשר)", "i").test(effectiveText) || chatReadFollowUp;
+      let chatIntent = new RegExp("(?:(?:גוגל|google|גוגול).{0,20}(?:" + chatWord + ")|(?:" + chatWord + ").{0,20}(?:גוגל|google|גוגול)|(?:^|[\\s,])[בהל]?(?:" + chatWord + ")|איש\\s+קשר)", "i").test(effectiveText) || chatReadFollowUp;
+      if (!chatIntent) {
+        const replyish = /(?:^|\s)(?:תענה|ענה|תגיב|הגב|תשיב|תענו)\s+ל(?:ו|ה)(?![א-ת])|תשלח\s+ל(?:ו|ה)\s+תשובה|תגיד\s+ל(?:ו|ה)\s+ש/i.test(effectiveText);
+        if (replyish && callerPhone) {
+          try {
+            const lastChat = await kvGetList(env, "lastchat_" + callerPhone);
+            if (lastChat && lastChat.messages && lastChat.messages.length && Date.now() - Number(lastChat.ts || 0) < 36e5) chatIntent = true;
+          } catch (_) {}
+        }
+      }
       const emailIntent = /(?:(?<!ג'?י)מייל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
       const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
@@ -3542,7 +3551,7 @@ __name22(fmtChatList, "fmtChatList");function sinceFromToken(tok) {
   const t = String(tok || "").toLowerCase();
   if (t === "hour") return now - 36e5;
   if (t === "today") { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
-  if (t === "yesterday") { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() - 864e5; }
+  if (t === "yesterday") return now - 48 * 36e5;
   if (t === "week") return now - 7 * 864e5;
   if (t === "month") return now - 30 * 864e5;
   return 0;
