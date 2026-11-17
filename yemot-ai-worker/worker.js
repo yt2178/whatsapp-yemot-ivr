@@ -420,6 +420,26 @@ async function ensureYemotToken(env, force) {
 __name(ensureYemotToken, "ensureYemotToken");
 __name2(ensureYemotToken, "ensureYemotToken");
 __name22(ensureYemotToken, "ensureYemotToken");
+async function yemotApiJson(env, apiPath) {
+  const call = async (tok) => {
+    const sep = String(apiPath).includes("?") ? "&" : "?";
+    const r = await fetch("https://www.call2all.co.il/ym/api/" + apiPath + sep + "token=" + tok, { headers: { "User-Agent": "Mozilla/5.0" } });
+    const j = await r.json().catch(() => null);
+    return { ok: r.ok, j };
+  };
+  let tok = await ensureYemotToken(env);
+  let out = await call(tok).catch(() => ({ ok: false, j: null }));
+  const bad = !out.ok || !out.j || out.j.responseStatus === "EXCEPTION" || /session token is invalid|expired|FORBIDDEN/i.test(String((out.j && (out.j.message || out.j.responseStatus)) || ""));
+  if (bad) {
+    const fresh = await ensureYemotToken(env, true);
+    if (fresh) {
+      out = await call(fresh).catch(() => ({ ok: false, j: null }));
+      logEvent("yemot_api_retry", { path: String(apiPath).slice(0, 24), ok: Boolean(out.j && out.j.responseStatus === "OK") });
+    }
+  }
+  return out.j;
+}
+__name(yemotApiJson, "yemotApiJson");
 async function ttsTextToYemotFile(env, text) {
   const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
   if (!YEMOT_TOKEN || !String(text || "").trim()) return null;
@@ -480,8 +500,7 @@ __name22(ttsTextToYemotFile, "ttsTextToYemotFile");
 async function cleanupOldTtsFiles(env) {
   const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
   try {
-    const dirRes = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${YEMOT_TOKEN}&path=ivr2:9/r`);
-    const dirData = await dirRes.json().catch(() => null);
+    const dirData = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:9/r");
     const files = (dirData && (dirData.files || dirData.dirDetails)) || [];
     const cutoff = Date.now() - 108e5;
     const jobs = [];
@@ -736,6 +755,20 @@ var worker_default = {
         const res = await buildNewsAudio(env);
         return Response.json(res);
       }
+      if (k === "rectest") {
+        const dir = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:3/r");
+        const files = (dir && dir.files) || [];
+        const recent = files.filter((f) => /\.wav$/i.test(String(f.name || ""))).map((f) => ({ n: f.name, d: f.date || f.mtime })).slice(-5);
+        let dl = null;
+        const newest = await findNewestRecordingOnce(env, "0537876782");
+        if (newest) {
+          const tok = await ensureYemotToken(env);
+          const r2 = await fetch(`https://www.call2all.co.il/ym/api/DownloadFile?token=${tok}&path=ivr2:${newest}`);
+          const b = new Uint8Array(await r2.arrayBuffer().catch(() => new ArrayBuffer(0)));
+          dl = { path: newest, bytes: b.length, riff: b.length > 4 && b[0] === 82 && b[1] === 73 && b[2] === 70 && b[3] === 70 };
+        }
+        return Response.json({ dirStatus: String((dir && (dir.responseStatus || dir.message)) || "null"), count: files.length, recent, newest, download: dl });
+      }
       if (k === "chatsim") {
         const tx = url.searchParams.get("text") || "";
         const res = await handleGoogleChat(env, env.GROQ_KEY || "", tx, env.MAILBOX_OWNER_PHONE || "", "dbgsim", 1);
@@ -867,6 +900,11 @@ var worker_default = {
       if (!nf) {
         const midCall = sameCall;
         logEvent("newflow_no_recording", { caller: callerTail(callerPhone), midCall });
+        if (globalThis.__recDirErr) {
+          logEvent("newflow_dir_error_message", { caller: callerTail(callerPhone) });
+          const emsg = "\u05D9\u05E9 \u05EA\u05E7\u05DC\u05EA \u05D6\u05DE\u05E0\u05D9\u05EA \u05D1\u05E7\u05E9\u05E8 \u05DC\u05DE\u05E2\u05E8\u05DB\u05EA, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05D3\u05E7\u05D4";
+          return textResponse(`id_list_message=t-${emsg}&go_to_folder=/3/r`);
+        }
         const promptKind = (midCall || wasRecordPrompt) ? "notheard" : "greet";
         const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA" : "\u05E9\u05DC\u05D5\u05DD";
         let cachedPrompt = null;
@@ -1831,6 +1869,7 @@ function parseYemotDate(str) {
 __name(parseYemotDate, "parseYemotDate");
 __name2(parseYemotDate, "parseYemotDate");
 async function findNewestRecording(env, callerPhone, quick) {
+  globalThis.__recDirErr = false;
   const maxAttempts = quick ? 1 : 2;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const found = await findNewestRecordingOnce(env, callerPhone);
@@ -1841,9 +1880,12 @@ async function findNewestRecording(env, callerPhone, quick) {
 }
 async function findNewestRecordingOnce(env, callerPhone) {
   try {
-    const res = await fetch(`https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${env.YEMOT_TOKEN || ""}&path=ivr2:3/r`, { headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!res.ok) return null;
-    const j = await res.json().catch(() => null);
+    const j = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:3/r");
+    if (!j || j.responseStatus !== "OK") {
+      globalThis.__recDirErr = true;
+      logEvent("recording_dir_failed", { status: String((j && (j.responseStatus || j.message)) || "null").slice(0, 40) });
+      return null;
+    }
     const files = ((j && j.files) || []).filter((f) => /\.wav$/.test(String(f.name || "")) && !String(f.name || "").startsWith("~"));
     if (!files.length) return null;
     files.sort((a, b) => {
