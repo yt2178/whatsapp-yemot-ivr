@@ -388,6 +388,38 @@ async function edgeTtsMp3(text, timeoutMs) {
   }
 }
 
+async function ensureYemotToken(env, force) {
+  try {
+    if (!force) {
+      const c = await env.USER_MEMORY.get("yemot_token_live", { cacheTtl: 60 });
+      if (c) {
+        try {
+          const o = JSON.parse(c);
+          if (o && o.t && Date.now() - Number(o.at || 0) < 6 * 36e5) {
+            env.YEMOT_TOKEN = o.t;
+            return o.t;
+          }
+        } catch (_) {}
+      }
+    }
+    if (!env.YEMOT_USERNAME || !env.YEMOT_PASSWORD) return env.YEMOT_TOKEN || "";
+    const r = await fetch("https://www.call2all.co.il/ym/api/Login?username=" + encodeURIComponent(env.YEMOT_USERNAME) + "&password=" + encodeURIComponent(env.YEMOT_PASSWORD));
+    const d = await r.json().catch(() => null);
+    if (d && d.token) {
+      env.YEMOT_TOKEN = d.token;
+      try { await env.USER_MEMORY.put("yemot_token_live", JSON.stringify({ t: d.token, at: Date.now() })); } catch (_) {}
+      logEvent("yemot_token_refresh", { ok: true });
+      return d.token;
+    }
+    logEvent("yemot_token_refresh", { ok: false, msg: String((d && (d.message || d.responseStatus)) || "no_token").slice(0, 60) });
+  } catch (e) {
+    logEvent("yemot_token_refresh", { ok: false, msg: String(e && e.message || "err").slice(0, 60) });
+  }
+  return env.YEMOT_TOKEN || "";
+}
+__name(ensureYemotToken, "ensureYemotToken");
+__name2(ensureYemotToken, "ensureYemotToken");
+__name22(ensureYemotToken, "ensureYemotToken");
 async function ttsTextToYemotFile(env, text) {
   const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
   if (!YEMOT_TOKEN || !String(text || "").trim()) return null;
@@ -419,8 +451,18 @@ async function ttsTextToYemotFile(env, text) {
     const fname = Date.now() + "_" + Math.floor(Math.random() * 1e4) + ".wav";
     const fd = new FormData();
     fd.append("file", new Blob([blob], { type: "audio/mpeg" }), "a.mp3");
-    const upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${YEMOT_TOKEN}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd });
-    const upData = await upRes.json().catch(() => null);
+    let upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${YEMOT_TOKEN}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd });
+    let upData = await upRes.json().catch(() => null);
+    if (!(upData && upData.responseStatus === "OK")) {
+      const fresh = await ensureYemotToken(env, true);
+      if (fresh && fresh !== YEMOT_TOKEN) {
+        const fd2 = new FormData();
+        fd2.append("file", new Blob([blob], { type: "audio/mpeg" }), "a.mp3");
+        upRes = await fetch(`https://www.call2all.co.il/ym/api/UploadFile?token=${fresh}&path=ivr/9/r/${fname}&convertAudio=1`, { method: "POST", body: fd2 });
+        upData = await upRes.json().catch(() => null);
+        logEvent("tts_upload_retry_token", { ok: Boolean(upData && upData.responseStatus === "OK") });
+      }
+    }
     if (upData && upData.responseStatus === "OK") {
       logEvent("tts_file_uploaded", { ms: Date.now(), size: blob.length });
       return "/9/r/" + fname.replace(/\.wav$/, "");
@@ -580,6 +622,7 @@ var worker_default = {
   },
   async fetchInner(request, env, ctx) {
     const GROQ_KEY = env.GROQ_KEY || "";
+    try { await ensureYemotToken(env); } catch (_) {}
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
     const url = new URL(request.url);
     if (url.pathname === "/google-chat-events") {
@@ -692,6 +735,17 @@ var worker_default = {
       if (k === "newsbuild") {
         const res = await buildNewsAudio(env);
         return Response.json(res);
+      }
+      if (k === "chatsim") {
+        const tx = url.searchParams.get("text") || "";
+        const res = await handleGoogleChat(env, env.GROQ_KEY || "", tx, env.MAILBOX_OWNER_PHONE || "", "dbgsim", 1);
+        const body = typeof res === "string" ? res : await res.text().catch(() => "");
+        return Response.json({ from: chatDetectFrom(tx), since: chatDetectSince(tx), dbg: globalThis.__dbgChat || null, body: String(body).slice(0, 300) });
+      }
+      if (k === "chatplan") {
+        const tx = url.searchParams.get("text") || "";
+        const pl = await groqChatShort(env.GROQ_KEY || "", "אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בפורמט {\"action\":\"...\",\"params\":{}}. פעולות: recent, unread, search, read, send_text, save_contact, summary, reply. אם מבקשים הודעות של אדם הוסף from. אם מבקשים טווח זמן הוסף since.", tx, 250);
+        return Response.json({ text: tx, from: chatDetectFrom(tx), since: chatDetectSince(tx), plan: pl.slice(0, 300) });
       }
       if (k === "cleanup") {
         await cleanupOldTtsFiles(env);
@@ -844,7 +898,33 @@ var worker_default = {
       } else {
       const downloadUrl = `https://www.call2all.co.il/ym/api/DownloadFile?token=${YEMOT_TOKEN}&path=ivr2:${p}`;
       logEvent("recording_download_started", { caller: callerTail(callerPhone) });
-      const audioRes = await fetch(downloadUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      let audioRes = await fetch(downloadUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      try {
+        const probe0 = new Uint8Array(await audioRes.clone().arrayBuffer().catch(() => new ArrayBuffer(0))).slice(0, 4);
+        const riff0 = probe0.length === 4 && probe0[0] === 82 && probe0[1] === 73 && probe0[2] === 70 && probe0[3] === 70;
+        if (!riff0) {
+          logEvent("recording_not_riff", { status: audioRes.status, ct: String(audioRes.headers.get("content-type") || "").slice(0, 30) });
+          const fresh0 = await ensureYemotToken(env, true);
+          if (fresh0) {
+            audioRes = await fetch(`https://www.call2all.co.il/ym/api/DownloadFile?token=${fresh0}&path=ivr2:${p}`, { headers: { "User-Agent": "Mozilla/5.0" } });
+            const probe1 = new Uint8Array(await audioRes.clone().arrayBuffer().catch(() => new ArrayBuffer(0))).slice(0, 4);
+            logEvent("recording_retry_riff", { riff: probe1.length === 4 && probe1[0] === 82 && probe1[1] === 73 });
+          }
+        }
+      } catch (_) {}
+      if (audioRes.ok && /json|text/i.test(String(audioRes.headers.get("content-type") || ""))) {
+        const yemotErr = await audioRes.text().catch(() => "");
+        logEvent("recording_download_yemot_error", { msg: String(yemotErr).slice(0, 80) });
+        const freshTok = await ensureYemotToken(env, true);
+        if (freshTok && freshTok !== YEMOT_TOKEN) {
+          audioRes = await fetch(`https://www.call2all.co.il/ym/api/DownloadFile?token=${freshTok}&path=ivr2:${p}`, { headers: { "User-Agent": "Mozilla/5.0" } });
+          logEvent("recording_download_retry_token", { ok: audioRes.ok ? 1 : 0 });
+        }
+      }
+      if (audioRes.ok && /json|text/i.test(String(audioRes.headers.get("content-type") || ""))) {
+        logEvent("recording_download_failed", { status: "yemot_exception" });
+        return textResponse("id_list_message=t-\u05DC\u05D0 \u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E7\u05D1\u05DC \u05D0\u05EA \u05D4\u05D4\u05E7\u05DC\u05D8\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
+      }
       if (!audioRes.ok) {
         logEvent("recording_download_failed", { status: audioRes.status });
         return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E7\u05D1\u05DC \u05D0\u05EA \u05D4\u05D4\u05E7\u05DC\u05D8\u05D4, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1");
@@ -2763,7 +2843,7 @@ __name22(executeContinuation, "executeContinuation");
 async function correctTranscription(text) {
   const orig = (text || "").trim();
   if (!orig || orig.length > 300) return orig;
-  const SYS = "\u05D0\u05EA\u05D4 \u05DE\u05EA\u05E7\u05D9\u05DF \u05D8\u05E7\u05E1\u05D8 \u05E2\u05D1\u05E8\u05D9 \u05E9\u05EA\u05D5\u05DE\u05DC\u05DC \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DE\u05D4\u05E7\u05DC\u05D8\u05EA \u05D8\u05DC\u05E4\u05D5\u05DF \u05D1\u05E7\u05D5 \u05E2\u05D5\u05D6\u05E8 \u05D0\u05D9\u05E9\u05D9. \u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5: \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05DE\u05D8\u05D1\u05E2\u05D5\u05EA, \u05DE\u05D9\u05D9\u05DC \u05D5\u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA. \u05EA\u05E7\u05DF \u05D0\u05DA \u05D5\u05E8\u05E7 \u05E9\u05D9\u05D1\u05D5\u05E9\u05D9 \u05EA\u05DE\u05DC\u05D5\u05DC \u05D1\u05E8\u05D5\u05E8\u05D9\u05DD: \u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05DE\u05EA\u05D7\u05DC\u05E4\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA (\u05D6/\u05E1, \u05D8/\u05EA, \u05DB/\u05D7, \u05D3/\u05D6) \u05D0\u05D5 \u05DE\u05D9\u05DC\u05D4 \u05DC\u05D0 \u05E7\u05D9\u05D9\u05DE\u05EA \u05E9\u05D4\u05D2\u05D9\u05D9\u05EA\u05D4 \u05D3\u05D5\u05DE\u05D4 \u05DC\u05DE\u05D9\u05DC\u05D4 \u05E7\u05D9\u05D9\u05DE\u05EA \u05DE\u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5. \u05D3\u05D5\u05D2\u05DE\u05D0\u05D5\u05EA: \"תסכיר לי\" \u2192 \"תזכיר לי\". \"תסכורת\" \u2192 \"תזכורת\". \"בשבול האחרון\" \u2192 \"בשבוע האחרון\". \"בחודס האחרון\" \u2192 \"בחודש האחרון\". \"ימום\" \u2192 \"ביממה\". \u05DB\u05DC\u05DC\u05D9 \u05D1\u05E8\u05D6\u05DC: 1. \u05D0\u05DC \u05EA\u05E9\u05E0\u05D4 \u05DE\u05D9\u05DC\u05D9\u05DD \u05EA\u05E7\u05D9\u05E0\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D2\u05DD \u05D0\u05DD \u05E0\u05E8\u05D0\u05D5\u05EA \u05DE\u05D5\u05D6\u05E8\u05D5\u05EA \u05DC\u05DA. 2. \u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3, \u05D0\u05DC \u05EA\u05E9\u05DE\u05D8\u05D5 \u05D0\u05DC \u05EA\u05D7\u05DC\u05D9\u05E3 \u05DE\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05E9\u05DE\u05D5\u05EA. 3. \u05D0\u05DD \u05D0\u05D9\u05E0\u05DA \u05D1\u05D8\u05D5\u05D7 \u05E9\u05D9\u05E9 \u05E9\u05D9\u05D1\u05D5\u05E1 - \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9 \u05DE\u05D9\u05DC\u05D4 \u05D1\u05DE\u05D9\u05DC\u05D4. 4. \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05EA\u05D5\u05E7\u05DF, \u05D1\u05DC\u05D9 \u05E0\u05E7\u05D5\u05D3\u05EA\u05D9\u05D9\u05DD, \u05D4\u05E2\u05E8\u05D5\u05EA \u05D0\u05D5 \u05D4\u05E1\u05D1\u05D9\u05E8\u05D9\u05DD.";
+  const SYS = "\u05D0\u05EA\u05D4 \u05DE\u05EA\u05E7\u05D9\u05DF \u05D8\u05E7\u05E1\u05D8 \u05E2\u05D1\u05E8\u05D9 \u05E9\u05EA\u05D5\u05DE\u05DC\u05DC \u05D0\u05D5\u05D8\u05D5\u05DE\u05D8\u05D9\u05EA \u05DE\u05D4\u05E7\u05DC\u05D8\u05EA \u05D8\u05DC\u05E4\u05D5\u05DF \u05D1\u05E7\u05D5 \u05E2\u05D5\u05D6\u05E8 \u05D0\u05D9\u05E9\u05D9. \u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5: \u05EA\u05D6\u05DB\u05D5\u05E8\u05D5\u05EA, \u05E9\u05E2\u05D4 \u05D5\u05EA\u05D0\u05E8\u05D9\u05DA, \u05DE\u05D6\u05D2 \u05D0\u05D5\u05D5\u05D9\u05E8, \u05E9\u05E2\u05E8\u05D9 \u05DE\u05D8\u05D1\u05E2\u05D5\u05EA, \u05DE\u05D9\u05D9\u05DC \u05D5\u05E6\u05D0\u05D8, \u05E9\u05DC\u05D9\u05D7\u05EA \u05D4\u05D5\u05D3\u05E2\u05D5\u05EA, \u05D1\u05D3\u05D9\u05D7\u05D5\u05EA. \u05EA\u05E7\u05DF \u05D0\u05DA \u05D5\u05E8\u05E7 \u05E9\u05D9\u05D1\u05D5\u05E9\u05D9 \u05EA\u05DE\u05DC\u05D5\u05DC \u05D1\u05E8\u05D5\u05E8\u05D9\u05DD: \u05D0\u05D5\u05EA\u05D9\u05D5\u05EA \u05DE\u05EA\u05D7\u05DC\u05E4\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA (\u05D6/\u05E1, \u05D8/\u05EA, \u05DB/\u05D7, \u05D3/\u05D6) \u05D0\u05D5 \u05DE\u05D9\u05DC\u05D4 \u05DC\u05D0 \u05E7\u05D9\u05D9\u05DE\u05EA \u05E9\u05D4\u05D2\u05D9\u05D9\u05EA\u05D4 \u05D3\u05D5\u05DE\u05D4 \u05DC\u05DE\u05D9\u05DC\u05D4 \u05E7\u05D9\u05D9\u05DE\u05EA \u05DE\u05EA\u05D7\u05D5\u05DE\u05D9 \u05D4\u05E7\u05D5. \u05D3\u05D5\u05D2\u05DE\u05D0\u05D5\u05EA: \"תסכיר לי\" \u2192 \"תזכיר לי\". \"תסכורת\" \u2192 \"תזכורת\". \"בשבול האחרון\" \u2192 \"בשבוע האחרון\". \"בחודס האחרון\" \u2192 \"בחודש האחרון\". \"ימום\" \u2192 \"ביממה\". \"ביי ממש עונה\" \u2192 \"ביממה האחרונה\". \"לממה אחרונה\" \u2192 \"ביממה האחרונה\". \"בממחונה\" \u2192 \"ביממה האחרונה\". \"תבדוק את הצאט\" \u2192 \"תבדוק את הצ\u05f3אט\". \"בצאת\" \u2192 \"בצ\u05f3אט\". \"וייטי\" \u2192 \"וייטי\" (שם אדם, לא \"וייט\"). \"נהרי\" \u2192 \"נהרי\" (שם אדם). \"ידידיה\" \u2192 \"ידידיה\". \"עמנואל\" \u2192 \"עמנואל\". \"תסכם לי את הצאט\" \u2192 \"תסכם לי את הצ\u05f3אט\". \u05DB\u05DC\u05DC\u05D9 \u05D1\u05E8\u05D6\u05DC: 1. \u05D0\u05DC \u05EA\u05E9\u05E0\u05D4 \u05DE\u05D9\u05DC\u05D9\u05DD \u05EA\u05E7\u05D9\u05E0\u05D5\u05EA \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA \u05D2\u05DD \u05D0\u05DD \u05E0\u05E8\u05D0\u05D5\u05EA \u05DE\u05D5\u05D6\u05E8\u05D5\u05EA \u05DC\u05DA. 2. \u05D0\u05DC \u05EA\u05D5\u05E1\u05D9\u05E3, \u05D0\u05DC \u05EA\u05E9\u05DE\u05D8\u05D5 \u05D0\u05DC \u05EA\u05D7\u05DC\u05D9\u05E3 \u05DE\u05D9\u05DC\u05D9\u05DD \u05D0\u05D5 \u05E9\u05DE\u05D5\u05EA. 3. \u05D0\u05DD \u05D0\u05D9\u05E0\u05DA \u05D1\u05D8\u05D5\u05D7 \u05E9\u05D9\u05E9 \u05E9\u05D9\u05D1\u05D5\u05E1 - \u05D4\u05D7\u05D6\u05E8 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05E7\u05D5\u05E8\u05D9 \u05DE\u05D9\u05DC\u05D4 \u05D1\u05DE\u05D9\u05DC\u05D4. 4. \u05D4\u05D7\u05D6\u05E8 \u05D0\u05DA \u05D5\u05E8\u05E7 \u05D0\u05EA \u05D4\u05D8\u05E7\u05E1\u05D8 \u05D4\u05DE\u05EA\u05D5\u05E7\u05DF, \u05D1\u05DC\u05D9 \u05E0\u05E7\u05D5\u05D3\u05EA\u05D9\u05D9\u05DD, \u05D4\u05E2\u05E8\u05D5\u05EA \u05D0\u05D5 \u05D4\u05E1\u05D1\u05D9\u05E8\u05D9\u05DD.";
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 8000);
@@ -3197,8 +3277,13 @@ async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timef
       const g = grouped.get(key);
       if (g) { g.count += 1; } else { grouped.set(key, { m, count: 1 }); }
     }
-    const dedup = Array.from(grouped.values());
-    logEvent("digest_grouped", { total: messages.length, groups: dedup.length, account });
+    let dedup = Array.from(grouped.values());
+    const botRe = /(?:no-?reply|do-?not-?reply|notification|notifications|newsletter|noreply|@github|@supabase|@cloudflare|@google|@microsoft|@stripe|@mail\.|@info\.|team@|support@|info@|hello@)/i;
+    const isBot = (x) => botRe.test(String((x.m && x.m.from) || ""));
+    const personal = dedup.filter((g) => !isBot(g));
+    const automated = dedup.filter(isBot);
+    if (personal.length && automated.length) dedup = personal.concat(automated);
+    logEvent("digest_grouped", { total: messages.length, groups: dedup.length, personal: personal.length, account });
     const items = dedup.map((g, i) => ({ n: i + 1, from: cleanFromName(g.m.from), address: g.m.from, subject: String(g.m.subject || "").slice(0, 80), count: g.count, snippet: String(g.m.snippet || "").slice(0, 100) }));
     const sumPrompt = "אתה עוזר קולי בעברית בטלפון. קיבלת רשימת מיילים ממוינת מהחדש לישן. תסכם אותה למאזין בעברית מדוברת לפי הכללים: מיילים מאנשים פרטיים או גופים חשובים הזכר בשם השולח ובנושא ואמור אם חשוב. התראות אוטומטיות, ניוזלטרים, פרסומות ומיילים מתמיכה של חברות קבץ יחד בקצרה, למשל שתי התראות אבטחה מגוגל. אל תקריא את כל הרשימה אם היא ארוכה, סכם בכמה משפטים. כתוב בעברית בלי נקודות ובלי מקפים ובלי פסיקים כפולים. אם מייל נראה דחוף או חשוב במיוחד, הדגש זאת תחילה. שדה count אומר כמה מיילים זהים יש עם אותו נושא — הזכר אותם פעם אחת בלבד ואמור כמה כאלה יש. הרשימה: " + JSON.stringify(items);
     const ans = await groqChatShort(GROQ_KEY, sumPrompt, "סכם את המיילים", 700);
@@ -3452,11 +3537,115 @@ function fmtChatList(messages) {
 }
 __name(fmtChatList, "fmtChatList");
 __name2(fmtChatList, "fmtChatList");
-__name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId = "", account = null) {
+__name22(fmtChatList, "fmtChatList");function sinceFromToken(tok) {
+  const now = Date.now();
+  const t = String(tok || "").toLowerCase();
+  if (t === "hour") return now - 36e5;
+  if (t === "today") { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  if (t === "yesterday") { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() - 864e5; }
+  if (t === "week") return now - 7 * 864e5;
+  if (t === "month") return now - 30 * 864e5;
+  return 0;
+}
+__name(sinceFromToken, "sinceFromToken");
+function chatDetectFrom(text) {
+  const t = " " + String(text || "") + " ";
+  const m = t.match(/(?:מה\s+כתב|מה\s+כתבה|מה\s+אמר|מה\s+אמרה|מה\s+שלח|מה\s+שלחה|הודעות\s+מאת|הודעות\s+מהצ['׳]?אט\s+של|הודעות\s+של|הודעה\s+מאת|מאת)\s+([^,.!?]{2,30})/);
+  if (!m) return "";
+  let name = String(m[1] || "").trim();
+  name = name.replace(/(?:בשבוע\s+האחרון|בחודש\s+האחרון|מאתמול|מהיום|בצ['׳]?אט|היום|כרגע|האחרונה|האחרון)/g, " ").replace(/\s+/g, " ").trim();
+  name = name.split(/\s+/).slice(0, 3).join(" ").trim();
+  if (!name || /^(?:לי|לו|לה|אלי|אליו|אליה)$/.test(name)) return "";
+  return name;
+}
+__name(chatDetectFrom, "chatDetectFrom");
+function chatDetectSince(text) {
+  const t = String(text || "");
+  if (/מאתמול|של\s*אתמול/.test(t)) return "yesterday";
+  if (/בשעה\s+האחרונה|מהשעה|בשעות\s+האחרונות/.test(t)) return "hour";
+  if (/מהיום|היום|ביממה/.test(t)) return "today";
+  if (/בשבוע\s+האחרון|השבוע/.test(t)) return "week";
+  if (/בחודש\s+האחרון|החודש/.test(t)) return "month";
+  return "";
+}
+__name(chatDetectSince, "chatDetectSince");
+function chatFilterMsgs(msgs, fromName, sinceMs) {
+  let out = (msgs || []).slice();
+  const q = String(fromName || "").trim().toLowerCase();
+  if (q) {
+    const words = q.split(/\s+/).filter((w) => w.length >= 3);
+    out = out.filter((m) => {
+      const sender = String((m && m.sender) || "").toLowerCase();
+      if (!sender) return false;
+      if (sender.includes(q)) return true;
+      return words.some((w) => sender.includes(w));
+    });
+  }
+  if (sinceMs) out = out.filter((m) => (Date.parse((m && m.createTime) || "") || 0) >= sinceMs);
+  return out;
+}
+__name(chatFilterMsgs, "chatFilterMsgs");
+function hebSkeleton(name) {
+  const map = { "א": "", "ב": "b", "ג": "g", "ד": "d", "ה": "h", "ו": "v", "ז": "z", "ח": "h", "ט": "t", "י": "y", "כ": "k", "ך": "k", "ל": "l", "מ": "m", "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p", "ף": "p", "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t" };
+  let out = "";
+  for (const ch of String(name || "").toLowerCase()) {
+    if (map[ch] !== void 0) out += map[ch];
+    else if (/[a-z]/.test(ch)) out += ch;
+  }
+  return out.replace(/[aeiou]/g, "");
+}
+__name(hebSkeleton, "hebSkeleton");
+function isSubseq(small, big) {
+  let i = 0;
+  for (const ch of String(big)) { if (ch === String(small)[i]) i++; if (i >= String(small).length) return true; }
+  return String(small).length === 0;
+}
+__name(isSubseq, "isSubseq");
+function chatMatchPhonetic(wanted, msgs) {
+  const senders = Array.from(new Set((msgs || []).map((m) => String((m && m.sender) || "").trim()).filter(Boolean)));
+  const sk = hebSkeleton(wanted);
+  if (!sk || sk.length < 2) return [];
+  const out = senders.filter((sn) => {
+    const full = hebSkeleton(sn);
+    const first = hebSkeleton(String(sn).split(/\s+/)[0]);
+    const like = (a, b) => {
+      if (!a || !b) return false;
+      if (a === b) return true;
+      if (a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a))) return true;
+      if (a.length === 2 && isSubseq(a, b)) return true;
+      if (b.length >= 3 && isSubseq(b, a)) return true;
+      if (a.length >= 3 && isSubseq(a, b)) return true;
+      return false;
+    };
+    return like(full, sk) || like(first, sk);
+  });
+  return out;
+}
+__name(chatMatchPhonetic, "chatMatchPhonetic");
+async function chatMatchSenders(GROQ_KEY, wanted, msgs) {
+  try {
+    const senders = Array.from(new Set((msgs || []).map((m) => String((m && m.sender) || "").trim()).filter(Boolean)));
+    if (!senders.length) return [];
+    const sys = "אתה מתאים שם פרטי בעברית לשמות שולחים בהודעות צ\u05f3אט, שלרוב מופיעים באנגלית או בתעתיק. רשימת השולחים: " + senders.slice(0, 30).join(" | ") + ". החזר JSON בלבד בפורמט {\"matches\":[\"שם מדויק מהרשימה\"]}. אם אין התאמה סבירה החזר {\"matches\":[]}.";
+    const raw = await groqChatShort(GROQ_KEY, sys, String(wanted || ""), 80);
+    const jm = raw.match(/\{[\s\S]*\}/);
+    if (!jm) return [];
+    const j = JSON.parse(jm[0]);
+    const arr = Array.isArray(j.matches) ? j.matches : [];
+    let picked = arr.map((x) => String(x)).filter((x) => senders.includes(x));
+    if (!picked.length) picked = chatMatchPhonetic(wanted, msgs);
+    logEvent("chat_sender_match", { wanted: String(wanted || "").slice(0, 20), found: picked.length });
+    return picked;
+  } catch (_) {
+    return [];
+  }
+}
+__name(chatMatchSenders, "chatMatchSenders");
+async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, requestId = "", account = null) {
   try {
     if (!env.MAILBOX_OWNER_PHONE || !env.GMAIL_BRIDGE_SECRET) return speak("הגישה לצאט עדיין בהגדרה");
     if (normalizeIsraelPhone(callerPhone) !== normalizeIsraelPhone(env.MAILBOX_OWNER_PHONE)) return speak("הגישה לצאט מותרת רק מהטלפון של בעל החשבון");
-    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: recent להצגת ההודעות האחרונות בצאט לפי זמן, לבקשות כמו מה ההודעה האחרונה ששלחו לי, מי שלח לי הודעה, מה חדש בצאט, מה קורה בצאט, תקרא לי את הצאט או תבדוק את הצאט, החזר {"action":"recent","params":{"count":4}}, unread לקבלת הודעות שלא נקראו בלבד, רק כשנאמר במפורש לא נקראו או לא קראתי כמו האם יש הודעות שלא קראתי, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש או קרא הודעה מספר אחת או קרא הודעה מספר 1 או הודעה מספר שתיים או קריאת הודעה מספר שלוש היא read עם index לפי המספר שנאמר, אחת או 1 זה 1 שתיים או 2 זה 2 שלוש או 3 זה 3 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. כלל חשוב: מה ההודעה האחרונה, מי שלח לי הודעה, מה חדש בצאט, בדוק את הצאט או תבדוק אם יש הודעות חדשות הן כולן recent, ואילו unread רק לניסוח מפורש של לא נקראו או לא קראתי. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה.`;
+    const planner = `אתה מנתח בקשות ל Google Chat. החזר JSON בלבד בלי הסברים בפורמט {"action":"...","params":{}}. פעולות: recent להצגת ההודעות האחרונות בצאט לפי זמן, לבקשות כמו מה ההודעה האחרונה ששלחו לי, מי שלח לי הודעה, מה חדש בצאט, מה קורה בצאט, תקרא לי את הצאט או תבדוק את הצאט, החזר {"action":"recent","params":{"count":4}}, unread לקבלת הודעות שלא נקראו בלבד, רק כשנאמר במפורש לא נקראו או לא קראתי כמו האם יש הודעות שלא קראתי, search לחיפוש הודעות לפי מילים, read לקריאת הודעה לפי מספר מהרשימה האחרונה. בקשה כמו קרא הודעה אחת או קרא הודעה שתיים או שמע הודעה שלוש או קרא הודעה מספר אחת או קרא הודעה מספר 1 או הודעה מספר שתיים או קריאת הודעה מספר שלוש היא read עם index לפי המספר שנאמר, אחת או 1 זה 1 שתיים או 2 זה 2 שלוש או 3 זה 3 וכון, send_text לשליחת הודעת טקסט, save_contact לשמירת איש קשר. לשליחה החזר {"action":"send_text","params":{"to":"שם איש קשר, כינוי, או כתובת אימייל מלאה","text":"תוכן ההודעה"}}. לשמירת איש קשר החזר {"action":"save_contact","params":{"name":"שם","address":"כתובת אימייל מלאה","aliases":["כינוי"]}}. המילה שטרודל היא @ ונקודה היא . אין לנחש כתובת חסרה. כשמבקשים לשלוח הודעת קול או הודעה מתומללת, הפעולה היא send_text והטקסט הוא תוכן ההודעה שנאמר. כשלא ברור החזר {"action":"none","params":{}}. כתובות מייל באנגלית בלבד. כשהכתובת נאמרת באותיות בעברית, תרגם: וואי היא y, טי היא t, שטרודל הוא @ ונקודה היא . אם הנמען נאמר בשם, החזר את השם כפי שנאמר בלבד ואל תמציא כתובת בעצמך. כלל עדיפות חשוב: אם הבקשה מבקשת לשלוש הודעה לאיש קשר כלשהו, החזר תמיד send_text ולא חיפוש, גם אם הניסוח הוא בלשון עבר כמו נשלח, וגם אם הבקשה מוסיפה בתוכה לראות או לבדוק אם ההודעה הגיעה. כלל חשוב: מה ההודעה האחרונה, מי שלח לי הודעה, מה חדש בצאט, בדוק את הצאט או תבדוק אם יש הודעות חדשות הן כולן recent, ואילו unread רק לניסוח מפורש של לא נקראו או לא קראתי. אם הנמען הוא כינוי כמו לו, לה או אליו, החזר את הכינוי בשדה to כפי שנאמר. לעולם אל תחזיר save_contact כשמדובר בבקשת שליחה. פעולות נוספות: summary לסיכום מה קרה בצאט, לבקשות כמו תסכם לי את הצאט, מה קרה בצאט, תקצר לי את הצאט, ספר לי בקצרה מה היה, החזר {"action":"summary","params":{}}. reply למענה להודעה האחרונה שנשמעה, לבקשות כמו תענה לו, תגיב לו, תגיד לו ש, שלח לו תשובה, שלח לה, החזר {"action":"reply","params":{"text":"תוכן המענה"}}. בכל בקשה אפשר להוסיף סינון: אם מבקשים הודעות של אדם מסוים הוסף "from":"שם האדם כפי שנאמר". אם מבקשים טווח זמן הוסף "since" עם אחד הערכים hour לחשעה האחרונה, today להיום, yesterday לאתמול, week לשבוע האחרון, month לחודש האחרון. אין להחזיר from או since כשלא נאמר במפורש.`;
     let plan = {};
     const raw = await groqChatShort(GROQ_KEY, planner, transcribedText, 250);
     const match = raw.match(/\{[\s\S]*\}/);
@@ -3465,6 +3654,19 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
     } catch (_) {
     }
     const params = plan.params || {};
+    try {
+      const dFrom = chatDetectFrom(transcribedText);
+      const dSince = chatDetectSince(transcribedText);
+      const keepAction = /send_text|save_contact|read|reply/.test(String(plan.action || ""));
+      if (!keepAction && (dFrom || dSince)) {
+        plan.action = "recent";
+        if (dFrom) params.from = dFrom;
+        if (dSince) params.since = dSince;
+        if (!params.count) params.count = 5;
+        logEvent("chat_filter_forced", { from: String(dFrom || "").slice(0, 20), since: String(dSince || "") });
+        globalThis.__dbgChat = { dFrom, dSince, action: plan.action };
+      }
+    } catch (_) {}
     const listKey = "lastchat_" + callerPhone;
     logEvent("chat_intent", { action: String(plan.action || "none").slice(0, 30), caller: callerTail(callerPhone) });
     if (plan.action === "save_contact") {
@@ -3479,7 +3681,22 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
     if (plan.action === "recent") {
       if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "בדיקה");
       const cnt = Math.min(parseInt(params.count) || 4, 5);
-      const msgs = await chatRecentMessages(env, account, cnt);
+      const fromName = String(params.from || "").trim();
+      const sinceMs = sinceFromToken(params.since);
+      const fetched = await chatRecentMessages(env, account, (fromName || sinceMs) ? 25 : cnt);
+      let msgs = (fromName || sinceMs) ? chatFilterMsgs(fetched, fromName, sinceMs).slice(0, cnt) : fetched.slice(0, cnt);
+      try { globalThis.__dbgChat = { ...(globalThis.__dbgChat || {}), fromName, sinceMs, fetched: fetched.length, afterFilter: msgs.length }; } catch (_) {}
+      if ((fromName || sinceMs) && !msgs.length && fromName) {
+        let cands = chatMatchPhonetic(fromName, fetched);
+        if (!cands.length) cands = await chatMatchSenders(GROQ_KEY, fromName, fetched);
+        if (cands.length) msgs = chatFilterMsgs(fetched, "", sinceMs).filter((m) => cands.includes(String(m.sender || "").trim())).slice(0, cnt);
+        try { globalThis.__dbgChat = { ...(globalThis.__dbgChat || {}), cands: cands.slice(0, 4), finalMsgs: msgs.length }; } catch (_) {}
+      }
+      if ((fromName || sinceMs) && !msgs.length) {
+        logEvent("chat_filter_empty", { from: fromName.slice(0, 20), since: String(params.since || "") });
+        if (fromName) return speak("לא מצאתי הודעות מאת " + fromName);
+        return speak("לא מצאתי הודעות בטווח הזמן שביקשת");
+      }
       await kvSetList(env, listKey, { messages: msgs, ts: Date.now(), account });
       if (!msgs.length) {
         const ce = String(globalThis.__chatErr || "");
@@ -3501,7 +3718,22 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
         logEvent("chat_bridge_retry", { ok: Boolean(data && data.ok) });
       }
       if (!data.ok) return speak("לא הצלחתי כרגע לקרוא את הודעות הצאט");
-      await kvSetList(env, listKey, { messages: data.messages || [], ts: Date.now(), account });
+      const filtFrom = String(params.from || "").trim();
+      const filtSince = sinceFromToken(params.since);
+      let gotMsgs = data.messages || [];
+      if (filtFrom || filtSince) {
+        const beforeFilter = gotMsgs;
+        gotMsgs = chatFilterMsgs(gotMsgs, filtFrom, filtSince);
+        if (!gotMsgs.length && filtFrom) {
+          let cands2 = chatMatchPhonetic(filtFrom, beforeFilter);
+          if (!cands2.length) cands2 = await chatMatchSenders(GROQ_KEY, filtFrom, beforeFilter);
+          if (cands2.length) gotMsgs = beforeFilter.filter((m) => cands2.includes(String(m.sender || "").trim()));
+        }
+      }
+      await kvSetList(env, listKey, { messages: gotMsgs, ts: Date.now(), account });
+      if ((filtFrom || filtSince) && !gotMsgs.length) {
+        return speak(filtFrom ? "לא מצאתי הודעות מאת " + filtFrom : "לא מצאתי הודעות בטווח הזמן שביקשת");
+      }
       if (plan.action === "search" && !(data.messages || []).length) {
         const origQuery = String(params.query || "");
         const variants = await deepThinkVariants(GROQ_KEY, transcribedText, "חיפוש הודעות צאט", origQuery);
@@ -3510,9 +3742,15 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
           try {
             const r2 = await callBridge(env, { action: "chat_search", query: v, max: Math.min(parseInt(params.count) || 5, 10) }, account);
             if (r2 && r2.ok && (r2.messages || []).length) {
-              await kvSetList(env, listKey, { messages: r2.messages, ts: Date.now(), account });
+              let rmsgs = chatFilterMsgs(r2.messages, filtFrom, filtSince);
+              if (!rmsgs.length && filtFrom) {
+                const cd = await chatMatchSenders(GROQ_KEY, filtFrom, r2.messages);
+                if (cd.length) rmsgs = (r2.messages || []).filter((m) => cd.includes(String(m.sender || "").trim()));
+              }
+              if (!rmsgs.length) continue;
+              await kvSetList(env, listKey, { messages: rmsgs, ts: Date.now(), account });
               logEvent("deep_retry_found", { kind: "chat", variant: v.slice(0, 40) });
-              return speak("רגע, בדקתי עוד כמה אפשרויות ומצאתי. " + fmtChatList(r2.messages));
+              return speak("רגע, בדקתי עוד כמה אפשרויות ומצאתי. " + fmtChatList(rmsgs));
             }
           } catch (_) {
           }
@@ -3520,7 +3758,37 @@ __name22(fmtChatList, "fmtChatList");async function handleGoogleChat(env, GROQ_K
         logEvent("deep_retry_miss", { kind: "chat", variants: (variants || []).join("|").slice(0, 80) });
         return speak(await naturalMiss(GROQ_KEY, "chat", transcribedText, [origQuery, ...(variants || [])]));
       }
-      return speak(fmtChatList(data.messages || []));
+      return speak(fmtChatList(gotMsgs || []));
+    }
+    if (plan.action === "summary") {
+      if (!account) return await askAccount(env, callerPhone, "chat", transcribedText, "בדיקה");
+      const sFrom = String(params.from || "").trim();
+      const sSince = sinceFromToken(params.since);
+      const all = await chatRecentMessages(env, account, 25);
+      const use = (sFrom || sSince) ? chatFilterMsgs(all, sFrom, sSince) : all;
+      if (!use.length) return speak("לא מצאתי הודעות צאט לסיכום");
+      const lines = use.slice(0, 15).map((m) => cleanFromName(m.sender || "לא ידוע") + " (" + relTimeHeb(m.createTime) + "): " + String(m.text || "").slice(0, 180)).join("\n");
+      const ans = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית בטלפון. תסכם את הודעות הצאט ב-3 עד 5 משפטים קצרים, לפי נושאים ואנשים, הבלט מה דורש טיפול או תשובה. בלי נקודות בסוף משפט ובלי מקפים ובלי אימוג'ים. אל תמציא מידע.", lines, 320);
+      await kvSetList(env, listKey, { messages: use, ts: Date.now(), account });
+      logEvent("chat_summary", { count: use.length, ok: Boolean(ans) });
+      return speak(ans || fmtChatList(use));
+    }
+    if (plan.action === "reply") {
+      const list = await kvGetList(env, listKey);
+      const item = list && list.messages && list.messages[0];
+      const text = String(params.text || "").trim();
+      if (!item) return speak("אין הודעה אחרונה. בקש קודם את הודעות הצאט");
+      const senderName = cleanFromName(item.sender || "");
+      const contacts = await getContacts(env, callerPhone);
+      const matches = findContactMatches(contacts, senderName);
+      if (!matches.length) return speak("אין לי כתובת של " + senderName + ". אמור את הכתובת המלאה שלו");
+      if (matches.length > 1) {
+        const question = contQuestionFor(matches);
+        await setContState(env, callerPhone, { kind: "contact", action: "chat_send", payload: { text, account: (list && list.account) || account || 1 }, candidates: slimCandidates(matches), originalRequest: transcribedText, question, ts: Date.now() });
+        return speak(question);
+      }
+      if (!text) return speak("מה לכתוב בהודעה?");
+      return await chatSendConfirm(env, callerPhone, matches[0].address, matches[0].name, text, "", (list && list.account) || account || 1);
     }
     if (plan.action === "read") {
       const list = await kvGetList(env, listKey);
