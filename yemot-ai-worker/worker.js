@@ -3349,6 +3349,51 @@ __name22(openQuestion, "openQuestion");
 __name(askMailRange, "askMailRange");
 __name2(askMailRange, "askMailRange");
 __name22(askMailRange, "askMailRange");
+function emailBodyClean(body, cap) {
+  let t = String(body || "");
+  t = t.replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ");
+  t = t.replace(/<[^>]+>/g, " ");
+  t = t.replace(/https?:\/\/\S+/gi, " ");
+  t = t.replace(/\bwww\.\S+/gi, " ");
+  t = t.replace(/[\u200e\u200f\u202a-\u202e]/g, "");
+  t = t.replace(/&nbsp;/gi, " ").replace(/&quot;/gi, '"').replace(/&amp;/gi, "&").replace(/&#39;/gi, "'");
+  t = t.replace(/(?:להסרה|הסרה|unsubscribe|ניהול\s*העדפות|לצפייה\s*בגרסת\s*הדפדפן)[^\n]{0,80}/gi, " ");
+  t = t.replace(/\s+/g, " ").trim();
+  const cut = t.search(/(?:קישור\s*להסרה|unsubscribe|נשלח\s*אליך|ניתן\s*להשיב\s*להודעה|כל\s*הזכויות\s*שמורות)/i);
+  if (cut > 120) t = t.slice(0, cut).trim();
+  return t.slice(0, cap || 1800);
+}
+__name(emailBodyClean, "emailBodyClean");
+async function ttsLongToYemotFile(env, text, cap) {
+  const full = String(text || "").slice(0, cap || 1200);
+  const chunks = splitTtsChunks(full, 190).slice(0, 6);
+  if (!chunks.length) return null;
+  if (chunks.length === 1) return await ttsTextToYemotFile(env, chunks[0]);
+  const files = (await Promise.all(chunks.map((ch) => ttsTextToYemotFile(env, ch).catch(() => null)))).filter(Boolean);
+  if (!files.length) return null;
+  if (files.length === 1) return files[0];
+  try {
+    const tok = await ensureYemotToken(env);
+    const parts = (await Promise.all(files.map((f) => fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + tok + "&path=ivr2:" + String(f).replace(/^\//, "") + ".wav", { headers: { "User-Agent": "Mozilla/5.0" } }).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)))).filter((b) => b && b.byteLength > 300);
+    if (parts.length === files.length) {
+      const merged = mergeWavList(parts);
+      if (merged) {
+        const name = "long_" + Date.now();
+        const fd = new FormData();
+        fd.append("file", new Blob([merged], { type: "audio/wav" }), "long.wav");
+        const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr/9/r/" + name + ".wav&convertAudio=1", { method: "POST", body: fd });
+        const uj = await up.json().catch(() => null);
+        if (uj && uj.responseStatus === "OK") {
+          logEvent("tts_long_merged", { parts: parts.length, chars: full.length });
+          return "/9/r/" + name;
+        }
+      }
+    }
+  } catch (_) {}
+  logEvent("tts_long_chain", { parts: files.length, chars: full.length });
+  return files.join(".f-");
+}
+__name(ttsLongToYemotFile, "ttsLongToYemotFile");
 async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timeframe, unread) {
   try {
     const rangeQ = timeframe === "day" ? "newer_than:1d" : timeframe === "week" ? "newer_than:7d" : timeframe === "month" ? "newer_than:30d" : "";
@@ -3433,6 +3478,53 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     const p = plan.params || {};
     logEvent("email_intent", { action: String(plan.action).slice(0, 20), caller: callerTail(callerPhone) });
     const listKey = "lastlist_" + callerPhone;
+    try {
+      const _t = String(transcribedText || "");
+      const _lastFrom = _t.match(/(?:ה?מייל|המכתב|ההודעה|מייל)\s+(?:ה)?אחרו[ןנ]\s+(?:ש(?:שלחו|שלחה|שלח|הגיע|הגיעה|התקבל)\s+)?(?:מ|מאת)\s+([^,.!?]{2,40})/);
+      const _lastAny = /(?:ה?מייל|המכתב)\s+(?:ה)?אחרו[ןנ]/.test(_t) && !/רשימ/.test(_t);
+      if (_lastFrom) { plan.action = "read_last"; p.query = _lastFrom[1].trim(); logEvent("email_read_last", { q: p.query.slice(0, 30) }); }
+      else if (_lastAny) { plan.action = "read_last"; p.query = String(p.query || ""); logEvent("email_read_last", { q: "" }); }
+    } catch (_) {}
+    if (plan.action === "read_last") {
+      if (!account) return await askAccount(env, callerPhone, "email", transcribedText, "בדיקה");
+      const q = String(p.query || "").trim();
+      const sr = await callBridge(env, { action: "search", query: q || "in:inbox", max: 6 }, account);
+      if (!sr.ok) return speak("יש תקלה בקריאת המייל, נסה שוב");
+      let list = (sr.messages || []).filter((m) => m && m.id);
+      if (!list.length && q) {
+        const variants = await deepThinkVariants(GROQ_KEY, transcribedText, "חיפוש מיילים", q);
+        for (const v of variants) {
+          if (!v || v === q) continue;
+          const r2 = await callBridge(env, { action: "search", query: v, max: 6 }, account);
+          if (r2 && r2.ok && (r2.messages || []).length) { list = r2.messages; break; }
+        }
+      }
+      if (!list.length) return speak(q ? "לא מצאתי מייל מאת " + q : "לא מצאתי מיילים בתיבה");
+      try {
+        const _w = q.split(/\s+/).filter((w) => w.length >= 3);
+        if (_w.length) {
+          const scoreOf = (m) => {
+            const f = String(m.from || "");
+            const sub = String(m.subject || "");
+            let sc = 0;
+            for (const w of _w) { if (f.includes(w)) sc += 2; if (sub.includes(w)) sc += 1; }
+            return sc;
+          };
+          list.sort((a, b) => scoreOf(b) - scoreOf(a) || (Date.parse(b.date || 0) || 0) - (Date.parse(a.date || 0) || 0));
+        }
+      } catch (_) {}
+      await kvSetList(env, listKey, { messages: list, ts: Date.now(), account });
+      const item = list[0];
+      const full = await callBridge(env, { action: "get", id: item.id }, account);
+      if (!full.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
+      const body = emailBodyClean(full.body || item.snippet || "", 1400);
+      if (!body || body.length < 20) return speak("המייל הזה ריק מתוכן");
+      const head = "המכתב האחרון " + (q ? "מ" + q + " " : "") + "מאת " + cleanFromName(full.from || item.from || "לא ידוע") + ", בנושא " + String(full.subject || item.subject || "ללא נושא").slice(0, 90) + ". ";
+      logEvent("email_read_last_ok", { chars: body.length, q: q.slice(0, 30) });
+      const file = await ttsLongToYemotFile(env, head + body, 1550);
+      if (file) return textResponse(`id_list_message=f-${file}&go_to_folder=/3/r`);
+      return speak(head + body, 900);
+    }
     if (plan.action === "digest") {
       const unread = !!(p.unread || /(?:לא\s*(?:נקראו|קראתי|נקרא|נקראתי))/.test(transcribedText));
       let timeframe = String(p.timeframe || "ask");
@@ -3485,8 +3577,14 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
       const item = list.messages[idx];
       const data = await callBridge(env, { action: "get", id: item.id }, list.account || account || 1);
       if (!data.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
-      const ans = await groqChatShort(GROQ_KEY, "אתה עוזר קולי בעברית בטלפון. הקרא את המייל הבא בעברית טבעית וברורה, מקסימום 6 משפטים, בלי נקודות ובלי מקפים. מאת " + cleanFromName(data.from) + ", בנושא " + (data.subject || "ללא נושא") + ", והתוכן הוא: " + (data.body || "").slice(0, 1800), "הקרא את המייל", 450);
-      return speak(ans || "לא הצלחתי להקריא את המייל");
+      const body = emailBodyClean(data.body || item.snippet || "", 1300);
+      const head = "מייל מאת " + cleanFromName(data.from || item.from || "לא ידוע") + ", בנושא " + String(data.subject || item.subject || "ללא נושא").slice(0, 90) + ". ";
+      if (body && body.length >= 20) {
+        const file = await ttsLongToYemotFile(env, head + body, 2000);
+        if (file) return textResponse(`id_list_message=f-${file}&go_to_folder=/3/r`);
+        return speak(head + body, 900);
+      }
+      return speak("המייל הזה ריק מתוכן");
     }
     if (plan.action === "send") {
       if (!account) return await askAccount(env, callerPhone, "email", transcribedText, "שליחה");
