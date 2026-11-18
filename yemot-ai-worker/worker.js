@@ -2038,11 +2038,18 @@ async function findNewestRecordingOnce(env, callerPhone) {
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
 async function kvGetJson(env, key) {
+  try {
+    const r = await doStateFetch(env, key, "GET");
+    if (r && r.value !== undefined && r.value !== null) return typeof r.value === "string" ? JSON.parse(r.value) : r.value;
+  } catch (_) {}
   try { const raw = await env.USER_MEMORY.get(key); return raw ? JSON.parse(raw) : null; } catch (_) { return null; }
 }
 __name(kvGetJson, "kvGetJson");
 async function kvPutJson(env, key, val, ttl) {
-  try { await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: ttl || 3600 }); } catch (_) {}
+  try { await doStateFetch(env, key, "PUT", val); } catch (_) {}
+  try {
+    if (globalThis.__kvOk !== false) await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: ttl || 3600 });
+  } catch (_) { globalThis.__kvOk = false; }
 }
 __name(kvPutJson, "kvPutJson");
 async function searchWebBudgeted(env, GROQ_KEY, query, instructions) {
@@ -2410,11 +2417,10 @@ __name2(doStateFetch, "doStateFetch");
 __name22(doStateFetch, "doStateFetch");
 async function kvGetList(env, key) {
   try {
-    if (/^(?:cont_|pend_|lt_|convo_)/.test(key) && env.CONT_STATE) {
-      const r = await doStateFetch(env, key, "GET");
-      if (r && r.value !== undefined && r.value !== null) return r.value;
-      if (r && r.value === null) return null;
-    }
+    const r = await doStateFetch(env, key, "GET");
+    if (r && r.value !== undefined && r.value !== null) return r.value;
+  } catch (_) {}
+  try {
     const v = await env.USER_MEMORY.get(key);
     return v ? JSON.parse(v) : null;
   } catch (_) {
@@ -2425,12 +2431,11 @@ __name(kvGetList, "kvGetList");
 __name2(kvGetList, "kvGetList");
 __name22(kvGetList, "kvGetList");
 async function kvSetList(env, key, val) {
+  try { await doStateFetch(env, key, "PUT", val); } catch (_) {}
   try {
-    if (/^(?:cont_|pend_|lt_|convo_)/.test(key) && env.CONT_STATE) {
-      await doStateFetch(env, key, "PUT", val);
-    }
-    await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: 600 });
+    if (globalThis.__kvOk !== false) await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: 900 });
   } catch (_) {
+    globalThis.__kvOk = false;
   }
 }
 __name(kvSetList, "kvSetList");
@@ -3554,6 +3559,25 @@ async function emailPlayParts(env, callerPhone, item, fullText) {
   return { kind: "first", f: f0, total: parts.length };
 }
 __name(emailPlayParts, "emailPlayParts");
+function digestNorm(w) { return String(w || "").replace(/^[המבלכש]/, "").trim(); }
+function digestMatchItems(q, items) {
+  const words = String(q || "").split(/\s+/).map(digestNorm).filter((w) => w.length >= 3);
+  if (!words.length) return null;
+  let best = null, bestScore = 0;
+  for (const it of items || []) {
+    const fromHay = digestNorm(String(it.from || ""));
+    const subHay = digestNorm(String(it.subject || ""));
+    let sc = 0;
+    for (const w of words) {
+      const stem = w.slice(0, Math.max(3, w.length - 1));
+      if (fromHay.includes(stem)) sc += 3;
+      else if (subHay.includes(stem)) sc += 1;
+    }
+    if (sc > bestScore) { bestScore = sc; best = it; }
+  }
+  return bestScore >= 3 ? best : null;
+}
+__name(digestMatchItems, "digestMatchItems");
 async function emailAudioBuild(env, item, head, body) {
   try {
     const f = await ttsLongToYemotFile(env, head + body, 0);
@@ -3584,20 +3608,26 @@ async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timef
     const rangeQ = timeframe === "day" ? "newer_than:1d" : timeframe === "week" ? "newer_than:7d" : timeframe === "month" ? "newer_than:30d" : "";
     const q = [unread ? "is:unread" : "", rangeQ].filter(Boolean).join(" ") || "in:inbox";
     const messages = [];
-    let pageToken = null;
-    const maxPages = timeframe === "day" ? 2 : timeframe === "week" ? 3 : 5;
-    for (let i = 0; i < maxPages; i++) {
-      const payload = { action: "search", query: q, max: 10 };
-      if (pageToken) payload.pageToken = pageToken;
-      const data = await callBridge(env, payload, account);
-      if (!data.ok) {
-        logEvent("digest_bridge_failed", { account });
-        return speak(unread ? "לא הצלחתי כרגע לבדוק את המיילים שלא נקראו" : "אין עדיין חיבור פעל למייל, יש להשלים את אישור ההרשאה");
+    const seenIds = new Set();
+    const addAll = function(arr) {
+      for (const m of arr || []) {
+        if (!m) continue;
+        const k = String(m.id || (String(m.threadId || "") + "|" + String(m.date || m.subject || "")));
+        if (seenIds.has(k)) continue;
+        seenIds.add(k);
+        messages.push(m);
       }
-      messages.push(...(data.messages || []));
-      pageToken = data.next_page_token || data.nextPageToken || null;
-      if (!pageToken) break;
+    };
+    const baseQueries = [q, q + " category:primary", q + " category:updates", q + " category:promotions"];
+    const bulk = await Promise.all(baseQueries.map((qq) => callBridge(env, { action: "search", query: qq, max: 10 }, account).catch(() => null)));
+    let anyOk = false;
+    for (const r of bulk) { if (r && r.ok) { anyOk = true; addAll(r.messages); } }
+    if (!anyOk) {
+      logEvent("digest_bridge_failed", { account });
+      return speak(unread ? "לא הצלחתי כרגע לבדוק את המיילים שלא נקראו" : "אין עדיין חיבור פעל למייל, יש להשלים את אישור ההרשאה");
     }
+    if (messages.length > 70) messages.length = 70;
+    messages.sort((a, b) => (Date.parse(b.date || 0) || 0) - (Date.parse(a.date || 0) || 0));
     await kvSetList(env, "lastlist_" + callerPhone, { messages: messages.slice(0, 10), ts: Date.now(), account });
     const rangeTxt = timeframe === "day" ? "ביממה האחרונה" : timeframe === "week" ? "בשבוע האחרון" : timeframe === "month" ? "בחודש האחרון" : "";
     if (!messages.length) return speak(unread ? "אין מיילים שלא נקראו" : `אין מיילים חדשים ${rangeTxt}`);
@@ -3615,11 +3645,12 @@ async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timef
     if (personal.length && automated.length) dedup = personal.concat(automated);
     logEvent("digest_grouped", { total: messages.length, groups: dedup.length, personal: personal.length, account });
     const items = dedup.map((g, i) => ({ n: i + 1, from: cleanFromName(g.m.from), address: g.m.from, subject: String(g.m.subject || "").slice(0, 80), count: g.count, snippet: String(g.m.snippet || "").slice(0, 100) }));
+    try { await kvPutJson(env, "lastdigest_" + callerPhone, { items, account, unread: Boolean(unread), ts: Date.now() }, 86400); } catch (_) {}
     const sumPrompt = "אתה עוזר קולי בעברית בטלפון. קיבלת רשימת מיילים ממוינת מהחדש לישן. תסכם אותה למאזין בעברית מדוברת לפי הכללים: מיילים מאנשים פרטיים או גופים חשובים הזכר בשם השולח ובנושא ואמור אם חשוב. התראות אוטומטיות, ניוזלטרים, פרסומות ומיילים מתמיכה של חברות קבץ יחד בקצרה, למשל שתי התראות אבטחה מגוגל. אל תקריא את כל הרשימה אם היא ארוכה, סכם בכמה משפטים. כתוב בעברית בלי נקודות ובלי מקפים ובלי פסיקים כפולים. אם מייל נראה דחוף או חשוב במיוחד, הדגש זאת תחילה. שדה count אומר כמה מיילים זהים יש עם אותו נושא — הזכר אותם פעם אחת בלבד ואמור כמה כאלה יש. הרשימה: " + JSON.stringify(items);
     const ans = await groqChatShort(GROQ_KEY, sumPrompt, "סכם את המיילים", 700);
     const totalTxt = messages.length >= 50 ? "יותר מחמישים" : String(messages.length);
     const prefix = unread ? "בדקתי את המיילים שלא נקראו" : `בדקתי את המיילים ${rangeTxt}`;
-    const suffix = messages.length <= 10 ? "" : " אם תרצה לשמוע מייל מסוים, אמור קרא מייל לפי מספר";
+    const suffix = " אפשר לומר למשל הקרא את המייל מישיבת בית הלוי";
     return speak(`${prefix}, סך הכול ${totalTxt} מיילים. ${ans || "לא הצלחתי לסכם, אמור הקרא רשימת מיילים"}.${suffix}`);
   } catch (e) {
     logEvent("digest_error", { msg: String(e && e.message || e).slice(0, 120) });
@@ -3665,9 +3696,11 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     const listKey = "lastlist_" + callerPhone;
     try {
       const _t = String(transcribedText || "");
-      const _lastFrom = _t.match(/(?:ה?מייל|המכתב|ההודעה|מייל)\s+(?:ה)?אחרו[ןנ]\s+(?:ש(?:שלחו|שלחה|שלח|הגיע|הגיעה|התקבל)\s+)?(?:מ|מאת)\s+([^,.!?]{2,40})/);
+      const _lastFrom = _t.match(/(?:ה?מייל|המכתב|ההודעה|מייל)\s+(?:ה)?אחרו[ןנ]\s+(?:ש(?:שלחו|שלחה|שלח|הגיע|הגיעה|התקבל)\s+)?(?:מאת\s+|מ)\s*([^,.!?]{2,40})/);
       const _lastAny = /(?:ה?מייל|המכתב)\s+(?:ה)?אחרו[ןנ]/.test(_t) && !/רשימ/.test(_t);
-      if (_lastFrom) { plan.action = "read_last"; p.query = _lastFrom[1].trim(); logEvent("email_read_last", { q: p.query.slice(0, 30) }); }
+      const _readFrom = _t.match(/(?:תקריא|הקרא|קרא|תשמיע|שמע)\s+(?:לי\s+)?(?:את\s+)?(?:כל\s+)?(?:ה?מייל|המכתב|ההודעה|המיילים)\s+(?:ה?אחרו[ןנ]\s+)?(?:מאת\s+|מ)\s*([^,.!?]{2,40})/);
+      if (_readFrom) { plan.action = "read_last"; p.query = _readFrom[1].trim(); logEvent("email_read_from", { q: p.query.slice(0, 30) }); }
+      else if (_lastFrom) { plan.action = "read_last"; p.query = _lastFrom[1].trim(); logEvent("email_read_last", { q: p.query.slice(0, 30) }); }
       else if (_lastAny) { plan.action = "read_last"; p.query = String(p.query || ""); logEvent("email_read_last", { q: "" }); }
     } catch (_) {}
     if (plan.action === "read_last") {
