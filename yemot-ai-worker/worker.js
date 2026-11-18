@@ -530,12 +530,6 @@ var worker_default = {
       const __phone = __url.searchParams.get("ApiPhone") || "";
       if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
         try { await env.USER_MEMORY.put("lastturn_" + __phone, String(Date.now()), { expirationTtl: 3600 }); } catch (_) {}
-        try {
-          const __cloneForKind = __res.clone();
-          const __b = await __cloneForKind.text();
-          const __kind = __b.includes("go_to_folder=/3/r") ? "record" : (__b.includes("go_to_folder=/3") ? "recheck" : "other");
-          await doStateFetch(env, "lastresp_" + __phone, "PUT", { kind: __kind, at: Date.now(), callId: String(new URL(__url.toString()).searchParams.get("ApiCallId") || "") });
-        } catch (_) {}
         let __converted = null;
         try {
           const __raw = await __res.clone().text();
@@ -575,13 +569,23 @@ var worker_default = {
           }
         } catch (_) {}
         if (__converted) __res = new Response(__converted, { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+        try {
+          const __finalBody = await __res.clone().text();
+          const __kind = __finalBody.includes("go_to_folder=/3/r") ? "record" : (__finalBody.includes("go_to_folder=/3") ? "recheck" : "other");
+          await doStateFetch(env, "lastresp_" + __phone, "PUT", { kind: __kind, at: Date.now(), callId: String(__url.searchParams.get("ApiCallId") || "") });
+        } catch (_) {}
         const __ms = Date.now() - __t0;
         let __body = "";
         try { __body = (await __res.clone().text()).slice(0, 400); } catch (_) {}
         const __key = "calllog_" + __phone;
         let __arr = [];
         try { __arr = JSON.parse((await env.USER_MEMORY.get(__key)) || "[]") || []; } catch (_) {}
-        __arr.unshift({ at: new Date().toISOString(), ms: __ms, callId: __url.searchParams.get("ApiCallId") || "", body: __body });
+        const __p = {};
+        for (const [pk, pv] of __url.searchParams.entries()) {
+          if (["token", "ApiCallId", "ApiPhone"].includes(pk)) continue;
+          __p[pk] = String(pv).slice(0, 40);
+        }
+        __arr.unshift({ at: new Date().toISOString(), ms: __ms, callId: __url.searchParams.get("ApiCallId") || "", q: __p, body: __body });
         if (__arr.length > 20) __arr = __arr.slice(0, 20);
         ctx.waitUntil(env.USER_MEMORY.put(__key, JSON.stringify(__arr), { expirationTtl: 604800 }));
       }
@@ -894,7 +898,7 @@ var worker_default = {
       let lastResp = null;
       try { lastResp = (await doStateFetch(env, "lastresp_" + callerPhone, "GET"))?.value; } catch (_) {}
       const curCallId = String(params.ApiCallId || "");
-      const sameCall = Boolean(lastResp && lastResp.callId && curCallId && lastResp.callId === curCallId);
+      const sameCall = Boolean(lastResp && ((lastResp.callId && curCallId && lastResp.callId === curCallId) || (Date.now() - Number(lastResp.at || 0) < 180000)));
       const wasRecordPrompt = Boolean(lastResp && lastResp.kind === "record" && sameCall);
       const nf = wasRecordPrompt ? await findNewestRecording(env, callerPhone, false) : null;
       if (!nf) {
@@ -905,6 +909,27 @@ var worker_default = {
           const emsg = "\u05D9\u05E9 \u05EA\u05E7\u05DC\u05EA \u05D6\u05DE\u05E0\u05D9\u05EA \u05D1\u05E7\u05E9\u05E8 \u05DC\u05DE\u05E2\u05E8\u05DB\u05EA, \u05E0\u05E1\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05E2\u05D5\u05D3 \u05D3\u05E7\u05D4";
           return textResponse(`id_list_message=t-${emsg}&go_to_folder=/3/r`);
         }
+        let emptyN = 0;
+        try { emptyN = Number(((await doStateFetch(env, "emptyrec_" + callerPhone, "GET"))?.value || {}).n || 0); } catch (_) {}
+        try {
+          if (lastResp && lastResp.callId && curCallId && lastResp.callId !== curCallId) {
+            await doStateFetch(env, "emptyrec_" + callerPhone, "DELETE");
+            emptyN = 0;
+          }
+        } catch (_) {}
+        if ((midCall || wasRecordPrompt) && emptyN < 1) {
+          try { await doStateFetch(env, "emptyrec_" + callerPhone, "PUT", { n: emptyN + 1, at: Date.now() }); } catch (_) {}
+          logEvent("newflow_soft_repeat", { n: emptyN + 1, caller: callerTail(callerPhone) });
+          let againFile = null;
+          try { againFile = (await kvGetJson(env, "ttsfile2_again") || {}).f || null; } catch (_) {}
+          if (!againFile) {
+            const gf = await ttsTextToYemotFile(env, "\u05D0\u05DE\u05E8\u05D5 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
+            if (gf) { againFile = gf; await kvPutJson(env, "ttsfile2_again", { f: gf, at: Date.now() }, 2592000); }
+          }
+          if (againFile) return textResponse(`id_list_message=f-${againFile}&go_to_folder=/3/r`);
+          return textResponse("id_list_message=f-/9/r/sil&go_to_folder=/3/r");
+        }
+        try { await doStateFetch(env, "emptyrec_" + callerPhone, "DELETE"); } catch (_) {}
         const promptKind = (midCall || wasRecordPrompt) ? "notheard" : "greet";
         const msg = promptKind === "notheard" ? "\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA" : "\u05E9\u05DC\u05D5\u05DD";
         let cachedPrompt = null;
@@ -917,6 +942,7 @@ var worker_default = {
         return textResponse(`id_list_message=t-${msg}&go_to_folder=/3/r`);
       }
       try { await doStateFetch(env, "waiting_" + callerPhone, "PUT", { n: 0, at: Date.now() }); } catch (_) {}
+      try { await doStateFetch(env, "emptyrec_" + callerPhone, "DELETE"); } catch (_) {}
       rawPath = nf;
     }
     try {
@@ -1870,13 +1896,22 @@ __name(parseYemotDate, "parseYemotDate");
 __name2(parseYemotDate, "parseYemotDate");
 async function findNewestRecording(env, callerPhone, quick) {
   globalThis.__recDirErr = false;
-  const maxAttempts = quick ? 1 : 2;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  const deadline = Date.now() + (quick ? 1200 : 5000);
+  let tries = 0;
+  while (true) {
+    tries++;
     const found = await findNewestRecordingOnce(env, callerPhone);
-    if (found) return found;
-    if (attempt < maxAttempts - 1) await new Promise((r) => setTimeout(r, 900));
+    if (found) {
+      logEvent("recording_found_after_tries", { tries });
+      return found;
+    }
+    if (globalThis.__recDirErr) return null;
+    if (Date.now() >= deadline) {
+      logEvent("recording_poll_gave_up", { tries });
+      return null;
+    }
+    await new Promise((r) => setTimeout(r, 800));
   }
-  return null;
 }
 async function findNewestRecordingOnce(env, callerPhone) {
   try {
@@ -1895,11 +1930,24 @@ async function findNewestRecordingOnce(env, callerPhone) {
       return (parseInt(b.name) || 0) - (parseInt(a.name) || 0);
     });
     const f = files[0];
+    const fSize = Number(f.size || 0);
+    const fDur = Number(f.duration || 0);
+    if (fSize && fSize < 6000) {
+      logEvent("recording_too_small", { file: f.name, size: fSize });
+      return null;
+    }
+    if (fDur && fDur < 0.4) {
+      logEvent("recording_too_short", { file: f.name, dur: fDur });
+      return null;
+    }
     const st = (await doStateFetch(env, "reclast_" + callerPhone, "GET"))?.value || null;
-    if (st && st.file === f.name) return null;
+    if (st && st.file === f.name && (Number(st.size || 0) === fSize || String(st.date || "") === String(f.date || f.mtime || ""))) {
+      logEvent("recording_already_done", { file: f.name, size: fSize });
+      return null;
+    }
     const ts = parseYemotDate(f.date || f.mtime);
-    if (!ts || Date.now() - ts > 36e4) return null;
-    await doStateFetch(env, "reclast_" + callerPhone, "PUT", { file: f.name, ts: Date.now() });
+    if (!ts || Date.now() - ts > 9e5) return null;
+    await doStateFetch(env, "reclast_" + callerPhone, "PUT", { file: f.name, size: fSize, date: String(f.date || f.mtime || ""), ts: Date.now() });
     logEvent("newflow_recording_found", { file: f.name, dur: f.duration || 0, caller: callerTail(callerPhone) });
     return f.path || "3/r/" + f.name;
   } catch (_) {
