@@ -512,7 +512,9 @@ async function cleanupOldTtsFiles(env) {
         protectedNames = [pg && pg.f, pn && pn.f].filter(Boolean).map((x) => String(x).split("/").pop());
       } catch (_) {}
       if (protectedNames.includes(String(f.name || "").replace(/\.wav$/, ""))) continue;
-      const m = String(f.name || "").match(/^(\d{13})_/);
+      const nm = String(f.name || "");
+      if (/^(?:sil|beep)\.wav$/i.test(nm)) continue;
+      const m = nm.match(/^(?:long_)?(\d{13})_/) || nm.match(/^long_(\d{13})/);
       if (m && Number(m[1]) < cutoff) jobs.push(fetch(`https://www.call2all.co.il/ym/api/FileAction?token=${YEMOT_TOKEN}&path=ivr2:9/r/${f.name}&action=delete&newPath=&newFileName=`).catch(() => null));
     }
     if (jobs.length) await Promise.all(jobs);
@@ -644,6 +646,7 @@ var worker_default = {
     }
   },
   async fetchInner(request, env, ctx) {
+    try { globalThis.__ctx = ctx; } catch (_) {}
     const GROQ_KEY = env.GROQ_KEY || "";
     try { await ensureYemotToken(env); } catch (_) {}
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
@@ -758,6 +761,18 @@ var worker_default = {
       if (k === "newsbuild") {
         const res = await buildNewsAudio(env);
         return Response.json(res);
+      }
+      if (k === "ctx") {
+        return Response.json({ has: Boolean(globalThis.__ctx), waitUntil: typeof (globalThis.__ctx && globalThis.__ctx.waitUntil) });
+      }
+      if (k === "longtest") {
+        const n = Math.min(parseInt(url.searchParams.get("chars") || "2000"), 6000);
+        const base = "זהו מבחן הקראה ארוכה בקו הטלפוני, המשפט הזה חוזר על עצמו כדי למדוד את משך הבניה. ";
+        let txt = "";
+        while (txt.length < n) txt += base;
+        const t0 = Date.now();
+        const f = await ttsLongToYemotFile(env, txt, 0);
+        return Response.json({ chars: txt.length, ms: Date.now() - t0, file: String(f).slice(0, 60), dbg: globalThis.__ttsLongDbg || null });
       }
       if (k === "rectest") {
         const dir = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:3/r");
@@ -895,6 +910,71 @@ var worker_default = {
       }
     }
     if (!rawPath || !rawPath.trim()) {
+      try {
+        const ep = (await doStateFetch(env, "emailparts_" + callerPhone, "GET"))?.value || null;
+        if (ep && ep.id && Date.now() - Number(ep.at || 0) < 600000) {
+          const nextIdx = Number(ep.idx || 0) + 1;
+          const total = Number(ep.total || 1);
+          if (nextIdx >= total) {
+            await doStateFetch(env, "emailparts_" + callerPhone, "DELETE");
+            logEvent("email_parts_done", { total });
+            return textResponse("go_to_folder=/3/r");
+          }
+          const idKey = String(ep.id || "").slice(0, 40);
+          const ck = "emailpart_" + idKey + "_" + nextIdx;
+          let cf = (await kvGetJson(env, ck) || {}).f || null;
+          if (!cf) {
+            const pt = await kvGetJson(env, "emailparts_text_" + idKey);
+            const chunkText = pt && pt.parts && pt.parts[nextIdx];
+            if (chunkText) cf = await ttsLongToYemotFile(env, chunkText, 0);
+          }
+          if (!cf) {
+            await doStateFetch(env, "emailparts_" + callerPhone, "DELETE");
+            return textResponse("go_to_folder=/3/r");
+          }
+          await doStateFetch(env, "emailparts_" + callerPhone, "PUT", { id: ep.id, idx: nextIdx, total, at: Number(ep.at || Date.now()) });
+          try {
+            if (globalThis.__ctx && globalThis.__ctx.waitUntil) {
+              globalThis.__ctx.waitUntil((async () => {
+                try {
+                  const pt2 = await kvGetJson(env, "emailparts_text_" + idKey);
+                  for (const k of [nextIdx + 1, nextIdx + 2]) {
+                    if (k >= total) continue;
+                    const nx = pt2 && pt2.parts && pt2.parts[k];
+                    if (!nx) continue;
+                    const already = await kvGetJson(env, "emailpart_" + idKey + "_" + k);
+                    if (already && already.f) continue;
+                    const fn = await ttsLongToYemotFile(env, nx, 0);
+                    if (fn) await kvPutJson(env, "emailpart_" + idKey + "_" + k, { f: fn, at: Date.now() }, 604800);
+                  }
+                } catch (_) {}
+              })());
+            }
+          } catch (_) {}
+          logEvent("email_part_play", { idx: nextIdx, total });
+          return textResponse(`id_list_message=f-${cf}&go_to_folder=/3`);
+        }
+      } catch (_) {}
+      try {
+        const eb = (await doStateFetch(env, "emailbuild_" + callerPhone, "GET"))?.value || null;
+        if (eb && eb.id && Date.now() - Number(eb.at || 0) < 120000) {
+          const built = await kvGetJson(env, "emailaudio_" + String(eb.id || "").slice(0, 40));
+          if (built && built.f) {
+            await doStateFetch(env, "emailbuild_" + callerPhone, "DELETE");
+            logEvent("email_build_ready", { loops: Number(eb.loops || 0) });
+            return textResponse(`id_list_message=f-${built.f}&go_to_folder=/3/r`);
+          }
+          const loops = Number(eb.loops || 0) + 1;
+          if (loops > 40) {
+            await doStateFetch(env, "emailbuild_" + callerPhone, "DELETE");
+            const tooLong = await prepPromptFile(env, "המכתב ארוך מדי, נסה שוב מאוחר יותר", "ttsfile2_toolong");
+            if (tooLong) return textResponse(`id_list_message=f-${tooLong}&go_to_folder=/3/r`);
+            return speak("המכתב ארוך מדי");
+          }
+          await doStateFetch(env, "emailbuild_" + callerPhone, "PUT", { id: eb.id, at: Number(eb.at || Date.now()), loops });
+          return textResponse("id_list_message=f-/9/r/sil&go_to_folder=/3");
+        }
+      } catch (_) {}
       let lastResp = null;
       try { lastResp = (await doStateFetch(env, "lastresp_" + callerPhone, "GET"))?.value; } catch (_) {}
       const curCallId = String(params.ApiCallId || "");
@@ -3361,39 +3441,144 @@ function emailBodyClean(body, cap) {
   t = t.replace(/\s+/g, " ").trim();
   const cut = t.search(/(?:קישור\s*להסרה|unsubscribe|נשלח\s*אליך|ניתן\s*להשיב\s*להודעה|כל\s*הזכויות\s*שמורות)/i);
   if (cut > 120) t = t.slice(0, cut).trim();
-  return t.slice(0, cap || 1800);
+  return cap && cap > 0 ? t.slice(0, cap) : t;
 }
 __name(emailBodyClean, "emailBodyClean");
 async function ttsLongToYemotFile(env, text, cap) {
-  const full = String(text || "").slice(0, cap || 1200);
-  const chunks = splitTtsChunks(full, 190).slice(0, 6);
+  const raw = String(text || "");
+  const full = cap && cap > 0 ? raw.slice(0, cap) : raw;
+  if (!full.trim()) return null;
+  const chunks = splitTtsChunks(full, 400).slice(0, 60);
   if (!chunks.length) return null;
   if (chunks.length === 1) return await ttsTextToYemotFile(env, chunks[0]);
-  const files = (await Promise.all(chunks.map((ch) => ttsTextToYemotFile(env, ch).catch(() => null)))).filter(Boolean);
+  const files = [];
+  for (let i = 0; i < chunks.length; i += 16) {
+    const batch = chunks.slice(i, i + 16);
+    const out = await Promise.all(batch.map((ch) => ttsTextToYemotFile(env, ch).catch(() => null)));
+    for (const f of out) if (f) files.push(f);
+  }
   if (!files.length) return null;
   if (files.length === 1) return files[0];
   try {
-    const tok = await ensureYemotToken(env);
-    const parts = (await Promise.all(files.map((f) => fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + tok + "&path=ivr2:" + String(f).replace(/^\//, "") + ".wav", { headers: { "User-Agent": "Mozilla/5.0" } }).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null)))).filter((b) => b && b.byteLength > 300);
-    if (parts.length === files.length) {
+    const dlOne = async (f) => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const tok = await ensureYemotToken(env);
+          const r = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + tok + "&path=ivr2:" + String(f).replace(/^\//, "") + ".wav", { headers: { "User-Agent": "Mozilla/5.0" } });
+          if (r.ok) {
+            const ab = await r.arrayBuffer();
+            if (ab.byteLength > 300) return ab;
+          } else {
+            await r.text().catch(() => "");
+          }
+        } catch (_) {}
+        await ensureYemotToken(env, true).catch(() => null);
+        await new Promise((r2) => setTimeout(r2, 250));
+      }
+      return null;
+    };
+    const parts = [];
+    for (let i = 0; i < files.length; i += 5) {
+      const batch = files.slice(i, i + 5);
+      const out = await Promise.all(batch.map((f) => dlOne(f)));
+      for (const b of out) if (b && b.byteLength > 300) parts.push(b);
+    }
+    globalThis.__ttsLongDbg = { chunks: chunks.length, files: files.length, parts: parts.length, merged: false };
+    if (parts.length >= Math.max(1, Math.floor(files.length * 0.8))) {
       const merged = mergeWavList(parts);
       if (merged) {
+        const tok2 = await ensureYemotToken(env);
         const name = "long_" + Date.now();
         const fd = new FormData();
         fd.append("file", new Blob([merged], { type: "audio/wav" }), "long.wav");
-        const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr/9/r/" + name + ".wav&convertAudio=1", { method: "POST", body: fd });
+        const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok2 + "&path=ivr/9/r/" + name + ".wav&convertAudio=1", { method: "POST", body: fd });
         const uj = await up.json().catch(() => null);
         if (uj && uj.responseStatus === "OK") {
+          globalThis.__ttsLongDbg = { chunks: chunks.length, files: files.length, parts: parts.length, merged: true };
           logEvent("tts_long_merged", { parts: parts.length, chars: full.length });
           return "/9/r/" + name;
         }
       }
     }
   } catch (_) {}
+  globalThis.__ttsLongDbg = { chunks: chunks.length, files: files.length, parts: (globalThis.__ttsLongDbg && globalThis.__ttsLongDbg.parts) || 0, merged: false };
   logEvent("tts_long_chain", { parts: files.length, chars: full.length });
   return files.join(".f-");
 }
 __name(ttsLongToYemotFile, "ttsLongToYemotFile");
+function splitEmailParts(text, size) {
+  const out = [];
+  let rest = String(text || "").trim();
+  const maxParts = 20;
+  while (rest.length && out.length < maxParts) {
+    if (rest.length <= size) { out.push(rest); rest = ""; break; }
+    let cut = rest.lastIndexOf(". ", size);
+    if (cut < size * 0.5) cut = rest.indexOf(" ", size);
+    if (cut <= 0) cut = size;
+    out.push(rest.slice(0, cut + 1).trim());
+    rest = rest.slice(cut + 1).trim();
+  }
+  if (rest) out.push(rest);
+  return out.filter(Boolean);
+}
+__name(splitEmailParts, "splitEmailParts");
+async function emailPlayParts(env, callerPhone, item, fullText) {
+  const t0 = String(fullText || "").trim();
+  let parts;
+  if (t0.length <= 1200) parts = [t0];
+  else {
+    const firstPart = splitEmailParts(t0, 300)[0];
+    const restTxt = t0.slice(firstPart.length).trim();
+    parts = [firstPart, ...splitEmailParts(restTxt, 600)];
+  }
+  if (!parts.length) return null;
+  if (parts.length === 1) {
+    const f = await ttsLongToYemotFile(env, parts[0], 0);
+    return f ? { kind: "single", f } : null;
+  }
+  await kvPutJson(env, "emailparts_text_" + String(item.id || "").slice(0, 40), { parts, at: Date.now() }, 86400);
+  const f0 = await ttsLongToYemotFile(env, parts[0], 0);
+  if (!f0) return null;
+  await doStateFetch(env, "emailparts_" + callerPhone, "PUT", { id: item.id, idx: 0, total: parts.length, at: Date.now() });
+  try {
+    if (globalThis.__ctx && globalThis.__ctx.waitUntil && parts[1]) {
+      globalThis.__ctx.waitUntil((async () => {
+        try {
+          const f1 = await ttsLongToYemotFile(env, parts[1], 0);
+          if (f1) await kvPutJson(env, "emailpart_" + String(item.id || "").slice(0, 40) + "_1", { f: f1, at: Date.now() }, 604800);
+        } catch (_) {}
+      })());
+    }
+  } catch (_) {}
+  logEvent("email_parts_start", { total: parts.length, chars: fullText.length });
+  return { kind: "first", f: f0, total: parts.length };
+}
+__name(emailPlayParts, "emailPlayParts");
+async function emailAudioBuild(env, item, head, body) {
+  try {
+    const f = await ttsLongToYemotFile(env, head + body, 0);
+    if (f) {
+      await kvPutJson(env, "emailaudio_" + String(item.id || "").slice(0, 40), { f, at: Date.now(), chars: (head + body).length }, 604800);
+      logEvent("email_audio_built", { chars: (head + body).length });
+    }
+    return f;
+  } catch (_) {
+    return null;
+  }
+}
+__name(emailAudioBuild, "emailAudioBuild");
+async function prepPromptFile(env, text, key) {
+  try {
+    const cached = await kvGetJson(env, key);
+    if (cached && cached.f) return cached.f;
+    const f = await ttsTextToYemotFile(env, text);
+    if (f) await kvPutJson(env, key, { f, at: Date.now() }, 2592000);
+    return f || null;
+  } catch (_) {
+    return null;
+  }
+}
+__name(prepPromptFile, "prepPromptFile");
 async function emailDigest(env, GROQ_KEY, callerPhone, requestId, account, timeframe, unread) {
   try {
     const rangeQ = timeframe === "day" ? "newer_than:1d" : timeframe === "week" ? "newer_than:7d" : timeframe === "month" ? "newer_than:30d" : "";
@@ -3517,12 +3702,29 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
       const item = list[0];
       const full = await callBridge(env, { action: "get", id: item.id }, account);
       if (!full.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
-      const body = emailBodyClean(full.body || item.snippet || "", 1400);
+      const body = emailBodyClean(full.body || item.snippet || "", 0);
       if (!body || body.length < 20) return speak("המייל הזה ריק מתוכן");
       const head = "המכתב האחרון " + (q ? "מ" + q + " " : "") + "מאת " + cleanFromName(full.from || item.from || "לא ידוע") + ", בנושא " + String(full.subject || item.subject || "ללא נושא").slice(0, 90) + ". ";
       logEvent("email_read_last_ok", { chars: body.length, q: q.slice(0, 30) });
-      const file = await ttsLongToYemotFile(env, head + body, 1550);
-      if (file) return textResponse(`id_list_message=f-${file}&go_to_folder=/3/r`);
+      const cacheKey = "emailaudio_" + String(item.id || "").slice(0, 40);
+      const cachedAudio = await kvGetJson(env, cacheKey);
+      if (cachedAudio && cachedAudio.f) {
+        logEvent("email_audio_cache_hit", { chars: body.length });
+        return textResponse(`id_list_message=f-${cachedAudio.f}&go_to_folder=/3/r`);
+      }
+      const planned = await emailPlayParts(env, callerPhone, item, head + body);
+      if (planned && planned.kind === "single") return textResponse(`id_list_message=f-${planned.f}&go_to_folder=/3/r`);
+      if (planned && planned.kind === "first") return textResponse(`id_list_message=f-${planned.f}&go_to_folder=/3`);
+      try {
+        if (globalThis.__ctx && globalThis.__ctx.waitUntil) {
+          globalThis.__ctx.waitUntil(emailAudioBuild(env, item, head, body).catch(() => null));
+          await doStateFetch(env, "emailbuild_" + callerPhone, "PUT", { id: item.id, at: Date.now(), loops: 0 });
+          const prep = await prepPromptFile(env, "מכין את המכתב, רגע", "ttsfile2_prep");
+          if (prep) return textResponse(`id_list_message=f-${prep}&go_to_folder=/3`);
+        }
+      } catch (_) {}
+      const file2 = await ttsLongToYemotFile(env, head + body, 0);
+      if (file2) return textResponse(`id_list_message=f-${file2}&go_to_folder=/3/r`);
       return speak(head + body, 900);
     }
     if (plan.action === "digest") {
@@ -3577,11 +3779,25 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
       const item = list.messages[idx];
       const data = await callBridge(env, { action: "get", id: item.id }, list.account || account || 1);
       if (!data.ok) return speak("יש תקלה בפתיחת המייל, נסה שוב");
-      const body = emailBodyClean(data.body || item.snippet || "", 1300);
+      const body = emailBodyClean(data.body || item.snippet || "", 0);
       const head = "מייל מאת " + cleanFromName(data.from || item.from || "לא ידוע") + ", בנושא " + String(data.subject || item.subject || "ללא נושא").slice(0, 90) + ". ";
       if (body && body.length >= 20) {
-        const file = await ttsLongToYemotFile(env, head + body, 2000);
-        if (file) return textResponse(`id_list_message=f-${file}&go_to_folder=/3/r`);
+        const ck = "emailaudio_" + String(item.id || "").slice(0, 40);
+        const cached2 = await kvGetJson(env, ck);
+        if (cached2 && cached2.f) return textResponse(`id_list_message=f-${cached2.f}&go_to_folder=/3/r`);
+        const planned2 = await emailPlayParts(env, callerPhone, item, head + body);
+        if (planned2 && planned2.kind === "single") return textResponse(`id_list_message=f-${planned2.f}&go_to_folder=/3/r`);
+        if (planned2 && planned2.kind === "first") return textResponse(`id_list_message=f-${planned2.f}&go_to_folder=/3`);
+        try {
+          if (globalThis.__ctx && globalThis.__ctx.waitUntil) {
+            globalThis.__ctx.waitUntil(emailAudioBuild(env, item, head, body).catch(() => null));
+            await doStateFetch(env, "emailbuild_" + callerPhone, "PUT", { id: item.id, at: Date.now(), loops: 0 });
+            const prep2 = await prepPromptFile(env, "מכין את המכתב, רגע", "ttsfile2_prep");
+            if (prep2) return textResponse(`id_list_message=f-${prep2}&go_to_folder=/3`);
+          }
+        } catch (_) {}
+        const f3 = await ttsLongToYemotFile(env, head + body, 0);
+        if (f3) return textResponse(`id_list_message=f-${f3}&go_to_folder=/3/r`);
         return speak(head + body, 900);
       }
       return speak("המייל הזה ריק מתוכן");
