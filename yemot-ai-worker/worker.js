@@ -407,7 +407,7 @@ async function ensureYemotToken(env, force) {
     const d = await r.json().catch(() => null);
     if (d && d.token) {
       env.YEMOT_TOKEN = d.token;
-      try { await env.USER_MEMORY.put("yemot_token_live", JSON.stringify({ t: d.token, at: Date.now() })); } catch (_) {}
+      try { await kvPutSafe(env, "yemot_token_live", JSON.stringify({ t: d.token, at: Date.now() })); } catch (_) {}
       logEvent("yemot_token_refresh", { ok: true });
       return d.token;
     }
@@ -531,7 +531,7 @@ var worker_default = {
       const __url = new URL(request.url);
       const __phone = __url.searchParams.get("ApiPhone") || "";
       if (env.USER_MEMORY && __phone && __url.pathname.startsWith("/ivr/")) {
-        try { await env.USER_MEMORY.put("lastturn_" + __phone, String(Date.now()), { expirationTtl: 3600 }); } catch (_) {}
+        try { await kvPutSafe(env, "lastturn_" + __phone, String(Date.now()), { expirationTtl: 3600 }); } catch (_) {}
         let __converted = null;
         try {
           const __raw = await __res.clone().text();
@@ -635,7 +635,7 @@ var worker_default = {
                 } catch (_) {
                 }
               }
-              await env.USER_MEMORY.put(k.name, JSON.stringify({ ...r, notified: true }), { expirationTtl: 86400 });
+              await kvPutSafe(env, k.name, JSON.stringify({ ...r, notified: true }), { expirationTtl: 86400 });
             }
           } catch (_) {
           }
@@ -762,6 +762,19 @@ var worker_default = {
         const res = await buildNewsAudio(env);
         return Response.json(res);
       }
+      if (k === "confirmtest") {
+        const kind = url.searchParams.get("kind") === "email" ? "email" : "chat";
+        const to = url.searchParams.get("to") || "test@example.com";
+        const nm = url.searchParams.get("name") || "דני";
+        const subj = url.searchParams.get("subject") || "פגישה מחר";
+        const body = url.searchParams.get("body") || "אני מאשר את הפגישה מחר";
+        const phone = url.searchParams.get("phone") || "0537876782";
+        globalThis.__origReq = url.searchParams.get("orig") || "תשלח הודעה לדני שאני מאשר את הפגישה מחר";
+        const txt = sendSummaryText(kind, to, nm, subj, body);
+        const res = await pendingConfirmRead(env, phone, kind === "email" ? { kind: "email", to, subject: subj, body, name: nm, account: 1 } : { kind: "chat", to, text: body, name: nm, account: 1 }, txt);
+        const bodyTxt = await res.text();
+        return Response.json({ prompt: txt, response: bodyTxt.slice(0, 300) });
+      }
       if (k === "ctx") {
         return Response.json({ has: Boolean(globalThis.__ctx), waitUntil: typeof (globalThis.__ctx && globalThis.__ctx.waitUntil) });
       }
@@ -815,7 +828,7 @@ var worker_default = {
         let val = url.searchParams.get("v") || "";
         if (!val && request.method === "POST") { try { val = await request.text(); } catch (_) {} }
         if (!key) return Response.json({ error: "missing key" });
-        await env.USER_MEMORY.put(key, val);
+        await kvPutSafe(env, key, val);
         try { await doStateFetch(env, key, "PUT", JSON.parse(val)); } catch (_) {}
         return Response.json({ ok: true, key, len: val.length });
       }
@@ -838,7 +851,7 @@ var worker_default = {
       if (v !== null && request.method === "POST") {
         let parsed;
         try { parsed = JSON.parse(v); } catch (_) { return Response.json({ error: "bad json" }); }
-        await env.USER_MEMORY.put(k, JSON.stringify(parsed));
+        await kvPutSafe(env, k, JSON.stringify(parsed));
         if (/^chat_contacts_/.test(k)) await doStateFetch(env, k, "PUT", parsed);
         return Response.json({ ok: true, key: k });
       }
@@ -1129,7 +1142,7 @@ var worker_default = {
         try { __tlArr = JSON.parse((await env.USER_MEMORY.get(__tlKey)) || "[]") || []; } catch (_) {}
         __tlArr.unshift({ at: new Date().toISOString(), text: String(transcribedText).slice(0, 300), raw: String(__rawWhisper).slice(0, 300), path: String(p || "").slice(0, 60), sim: isSim });
         if (__tlArr.length > 60) __tlArr = __tlArr.slice(0, 60);
-        await env.USER_MEMORY.put(__tlKey, JSON.stringify(__tlArr), { expirationTtl: 1209600 });
+        await kvPutSafe(env, __tlKey, JSON.stringify(__tlArr), { expirationTtl: 1209600 });
       } catch (_) {}
       try {
         const acctKey = "acct_" + normalizeIsraelPhone(callerPhone);
@@ -1544,7 +1557,7 @@ var worker_default = {
             const _relMsg = _clean(transcribedText.replace(_relM[0], " ")
               .replace(/(?:ת[י]?[זס]כ(?:יר[יים]?|ורת|ורות|ר)|ה[זס]כר(?:ת)?|א[זס]כור)(?:\s+לי)?/g, " ")
               .replace(/(?:^|\s)(?:אני רוצה|אני|רוצה|צריך|לי|בבקשה)(?=\s|$)/g, " "));
-            await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: _relFire.toISOString(), message: _relMsg }), { expirationTtl: 86400 });
+            await kvPutSafe(env, `reminder_${callerPhone}`, JSON.stringify({ fireAt: _relFire.toISOString(), message: _relMsg }), { expirationTtl: 86400 });
             return speak(`נשמרה תזכורת בעוד ${hebNumWords(_mins)} דקות: ${_relMsg}. בשעה זו תקבל צינטוק, וכשתתקשר תשמע את התזכורת.`);
           }
           const _hm = transcribedText.match(/(\d{1,2})(?::(\d{2}))?/);
@@ -1602,7 +1615,7 @@ var worker_default = {
             _msg = _msg.replace(_mre, " ");
           }
           const message = _stripAll(_msg);
-          await env.USER_MEMORY.put(`reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
+          await kvPutSafe(env, `reminder_${callerPhone}`, JSON.stringify({ fireAt: fireDate.toISOString(), message }), { expirationTtl: 86400 });
           const _hW2 = hebNumWords(hour === 0 ? 12 : hour > 12 ? hour - 12 : hour);
           const _tod2 = hour >= 21 || hour < 5 ? " בלילה" : hour >= 19 ? " בערב" : hour >= 12 && hour < 17 ? " בצהריים" : " בבוקר";
           const _minP2 = minute === 15 ? " ורבע" : minute === 30 ? " וחצי" : minute > 0 ? " ו" + hebNumWords(minute) + " דקות" : "";
@@ -1627,7 +1640,7 @@ var worker_default = {
             const mem = callerMemory || {};
             mem.name = __newName;
             mem.lastSeen = now.toISOString();
-            await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
+            await kvPutSafe(env, `mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
             return speak(`שמרתי את שמך כ${__newName}. מעכשיו אדע שאתה ${__newName}`);
           }
         }
@@ -1638,7 +1651,7 @@ var worker_default = {
           const mem = callerMemory || {};
           mem.name = newName;
           mem.lastSeen = now.toISOString();
-          await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
+          await kvPutSafe(env, `mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
           liveContext = `\u05E9\u05DE\u05E8\u05EA\u05D9 \u05D0\u05EA \u05E9\u05DE\u05DA \u05D1\u05DE\u05E2\u05E8\u05DB\u05EA: ${newName}. \u05D1\u05E4\u05E2\u05DD \u05D4\u05D1\u05D0\u05D4 \u05E9\u05EA\u05EA\u05E7\u05E9\u05E8, \u05D0\u05D3\u05E2 \u05E9\u05D0\u05EA\u05D4 ${newName}!`;
         }
         if (!liveContext && (transcribedText.includes("\u05D6\u05DE\u05E0\u05D9") || transcribedText.includes("\u05E9\u05E7\u05D9\u05E2\u05D4") || transcribedText.includes("\u05D6\u05E8\u05D9\u05D7\u05D4") || transcribedText.includes("\u05E9\u05D7\u05E8\u05D9\u05EA") || transcribedText.includes("\u05E7\u05E8\u05D9\u05D0\u05EA \u05E9\u05DE\u05E2") || transcribedText.includes("\u05DE\u05E0\u05D7\u05D4") || transcribedText.includes("\u05E2\u05E8\u05D1\u05D9\u05EA"))) {
@@ -1745,7 +1758,7 @@ var worker_default = {
         try {
           const mem = callerMemory || {};
           mem.lastSeen = now.toISOString();
-          await env.USER_MEMORY.put(`mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
+          await kvPutSafe(env, `mem_${callerPhone}`, JSON.stringify(mem), { expirationTtl: 2592e3 });
         } catch (_) {
         }
       }
@@ -1812,7 +1825,7 @@ async function askAccount(env, callerPhone, service, originalRequest, verb) {
   const pend = { service: String(service || "email"), originalRequest: String(originalRequest || ""), verb: String(verb || "בדיקה"), tries: 0, ts: Date.now() };
   const key = "acct_" + normalizeIsraelPhone(callerPhone);
   await doStateFetch(env, key, "PUT", pend);
-  await env.USER_MEMORY.put(key, JSON.stringify(pend), { expirationTtl: 300 });
+  await kvPutSafe(env, key, JSON.stringify(pend), { expirationTtl: 300 });
   logEvent("account_ask", { service: pend.service, verb: pend.verb, caller: callerTail(callerPhone) });
   return accountReadPrompt(pend);
 }
@@ -1844,7 +1857,7 @@ async function handleAccountSelection(env, digit, callerPhone, requestId) {
     }
     const pend2 = { ...pend, tries: (pend.tries || 0) + 1 };
     await doStateFetch(env, key, "PUT", pend2);
-    await env.USER_MEMORY.put(key, JSON.stringify(pend2), { expirationTtl: 300 });
+    await kvPutSafe(env, key, JSON.stringify(pend2), { expirationTtl: 300 });
     return accountReadPrompt(pend2);
   }
   await doStateFetch(env, key, "DELETE");
@@ -2038,6 +2051,16 @@ async function findNewestRecordingOnce(env, callerPhone) {
 }
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
+async function kvPutSafe(env, key, val, opts) {
+  if (globalThis.__kvOk === false) return;
+  try {
+    if (opts) await kvPutSafe(env, key, val, opts);
+    else await kvPutSafe(env, key, val);
+  } catch (_) {
+    globalThis.__kvOk = false;
+  }
+}
+__name(kvPutSafe, "kvPutSafe");
 async function kvGetJson(env, key) {
   try {
     const r = await doStateFetch(env, key, "GET");
@@ -2049,7 +2072,7 @@ __name(kvGetJson, "kvGetJson");
 async function kvPutJson(env, key, val, ttl) {
   try { await doStateFetch(env, key, "PUT", val); } catch (_) {}
   try {
-    if (globalThis.__kvOk !== false) await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: ttl || 3600 });
+    if (globalThis.__kvOk !== false) await kvPutSafe(env, key, JSON.stringify(val), { expirationTtl: ttl || 3600 });
   } catch (_) { globalThis.__kvOk = false; }
 }
 __name(kvPutJson, "kvPutJson");
@@ -2230,7 +2253,7 @@ async function buildNewsAudio(env) {
   fd.append("file", new Blob([merged], { type: "audio/wav" }), "news.wav");
   const up = await fetch("https://www.call2all.co.il/ym/api/UploadFile?token=" + tok + "&path=ivr2:0/000.wav&convertAudio=1", { method: "POST", body: fd });
   const upj = await up.json().catch(() => ({}));
-  try { await env.USER_MEMORY.put("news_audio_sig", JSON.stringify({ sig: sigNow, at: Date.now() })); } catch (_) {}
+  try { await kvPutSafe(env, "news_audio_sig", JSON.stringify({ sig: sigNow, at: Date.now() })); } catch (_) {}
   logEvent("news_audio_built", { items: dedup.length, parts: parts.length, bytes: merged.length, ai: aiUsed, ok: upj.responseStatus || "" });
   return { ok: upj.responseStatus === "OK", items: dedup.length, bytes: merged.length };
 }
@@ -2434,7 +2457,7 @@ __name22(kvGetList, "kvGetList");
 async function kvSetList(env, key, val) {
   try { await doStateFetch(env, key, "PUT", val); } catch (_) {}
   try {
-    if (globalThis.__kvOk !== false) await env.USER_MEMORY.put(key, JSON.stringify(val), { expirationTtl: 900 });
+    if (globalThis.__kvOk !== false) await kvPutSafe(env, key, JSON.stringify(val), { expirationTtl: 900 });
   } catch (_) {
     globalThis.__kvOk = false;
   }
@@ -2463,7 +2486,7 @@ __name22(getContacts, "getContacts");
 async function putContacts(env, callerPhone, contacts) {
   if (!env.USER_MEMORY) return false;
   try {
-    await env.USER_MEMORY.put(contactStorageKey(callerPhone), JSON.stringify(contacts));
+    await kvPutSafe(env, contactStorageKey(callerPhone), JSON.stringify(contacts));
     return true;
   } catch (_) {
     return false;
@@ -2500,7 +2523,7 @@ async function setContState(env, callerPhone, cont) {
   if (!env.USER_MEMORY) return;
   try {
     await doStateFetch(env, contStateKey(callerPhone), "PUT", cont);
-    await env.USER_MEMORY.put(contStateKey(callerPhone), JSON.stringify(cont), { expirationTtl: 600 });
+    await kvPutSafe(env, contStateKey(callerPhone), JSON.stringify(cont), { expirationTtl: 600 });
   } catch (_) {
   }
 }
@@ -2527,7 +2550,7 @@ async function setLastTarget(env, callerPhone, name, address, kind) {
   if (!env.USER_MEMORY || !address) return;
   try {
     await doStateFetch(env, lastTargetKey(callerPhone), "PUT", { name: String(name || ""), address, kind: String(kind || ""), ts: Date.now() });
-    await env.USER_MEMORY.put(lastTargetKey(callerPhone), JSON.stringify({ name: String(name || ""), address, kind: String(kind || ""), ts: Date.now() }), { expirationTtl: 3600 });
+    await kvPutSafe(env, lastTargetKey(callerPhone), JSON.stringify({ name: String(name || ""), address, kind: String(kind || ""), ts: Date.now() }), { expirationTtl: 3600 });
   } catch (_) {
   }
 }
@@ -3177,7 +3200,7 @@ async function saveConvoTurn(env, userText, answerText) {
     let prev = {}; try { const pDo = await doStateFetch(env, key, "GET"); prev = (pDo && pDo.value && pDo.value.turns) ? pDo.value : JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
     const turns = [...(prev.turns || []), { u: String(userText || "").slice(0, 200), a: String(answerText || "").slice(0, 300) }].slice(-6);
     await doStateFetch(env, key, "PUT", { turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() });
-    await env.USER_MEMORY.put(key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
+    await kvPutSafe(env, key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
   } catch (_) {}
 }
 __name(saveConvoTurn, "saveConvoTurn");
@@ -3373,7 +3396,7 @@ async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const head = cleanYemotText(cut > 0 ? full.slice(0, cut) : full, 600);
   const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
   await doStateFetch(env, "pend_" + normalizeIsraelPhone(callerPhone), "PUT", pend);
-await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
+await kvPutSafe(env, "pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
   return textResponse(`id_list_message=t-${head}&read=t-${question}=confirm,no,1,1,15,Digits,yes,yes,,,,,None,`);
 }
 __name(pendingConfirmRead, "pendingConfirmRead");
@@ -4402,7 +4425,7 @@ async function tlkStore(env, key, val) {
     let doOk = false;
     try { const j = JSON.stringify(val); if (j.length < 100000) { await doStateFetch(env, key, "PUT", val); doOk = true; } } catch (_) { await doStateFetch(env, key, "DELETE"); }
     if (!doOk) await doStateFetch(env, key, "DELETE");
-    await env.USER_MEMORY.put(key, JSON.stringify(val));
+    await kvPutSafe(env, key, JSON.stringify(val));
   } catch (e) {}
 }
 __name(tlkStore, "tlkStore");
@@ -5392,7 +5415,7 @@ async function handleTlkSiteApi(env, url, request) {
       }
       if (!okCode) return Response.json({ ok: false, error: "מספר הטלפון או הקוד שגויים" }, { headers: J });
       const token = crypto.randomUUID().replace(/-/g, "") + Date.now().toString(36);
-      await env.USER_MEMORY.put("tlk_sess_" + token, JSON.stringify({ phone, exp: Date.now() + 2592000000 }), { expirationTtl: 2592000 });
+      await kvPutSafe(env, "tlk_sess_" + token, JSON.stringify({ phone, exp: Date.now() + 2592000000 }), { expirationTtl: 2592000 });
       return Response.json({ ok: true, token, phone }, { headers: J });
     }
     const phone = await tlkSiteAuth(env, url, request);
