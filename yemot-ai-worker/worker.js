@@ -647,6 +647,7 @@ var worker_default = {
   },
   async fetchInner(request, env, ctx) {
     try { globalThis.__ctx = ctx; } catch (_) {}
+    try { globalThis.__env = env; } catch (_) {}
     const GROQ_KEY = env.GROQ_KEY || "";
     try { await ensureYemotToken(env); } catch (_) {}
     const YEMOT_TOKEN = env.YEMOT_TOKEN || "";
@@ -761,6 +762,17 @@ var worker_default = {
       if (k === "newsbuild") {
         const res = await buildNewsAudio(env);
         return Response.json(res);
+      }
+      if (k === "aitest") {
+        const q = url.searchParams.get("q") || "\u05DE\u05D4\u05D9 \u05D1\u05D9\u05E8\u05EA \u05E8\u05D5\u05E1\u05D9\u05D4";
+        const t0 = Date.now();
+        let ans = "";
+        if (url.searchParams.get("mode") === "ai") {
+          try { const o = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", { messages: [{ role: "user", content: q }], max_tokens: 120 }); ans = String((o && (o.response || o.result)) || ""); } catch (e) { ans = "ERR:" + String((e && e.message) || e); }
+        } else {
+          ans = await groqChatShort(GROQ_KEY, "\u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA", q, 80);
+        }
+        return Response.json({ ms: Date.now() - t0, ans: String(ans).slice(0, 200), hasAI: Boolean(env.AI) });
       }
       if (k === "confirmtest") {
         const kind = url.searchParams.get("kind") === "email" ? "email" : "chat";
@@ -1120,9 +1132,13 @@ var worker_default = {
         } catch (_) {
         }
         logEvent("transcription_failed", { status: whisperRes.status, code: errorCode });
-        return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
-      }
+        transcribedText = await whisperWorkersAi(env, audioBlob) || "";
+        if (!transcribedText) {
+          return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2 \u05D0\u05EA \u05D4\u05E9\u05D0\u05DC\u05D4, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05D5\u05EA\u05D4 \u05E9\u05D5\u05D1 \u05D1\u05D1\u05E7\u05E9\u05D4");
+        }
+      } else {
         transcribedText = (await whisperRes.json()).text?.trim() || "";
+      }
         if (false && wavInfo && !String(params.ApiCallId || "").startsWith("dbg_")) {
           const wres = await windowStep(env, winKey, winState, wavInfo, transcribedText);
           if (wres.continue) {
@@ -2051,6 +2067,19 @@ async function findNewestRecordingOnce(env, callerPhone) {
 }
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
+async function whisperWorkersAi(env, blob) {
+  try {
+    if (!env || !env.AI || !blob) return "";
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    const out = await env.AI.run("@cf/openai/whisper-large-v3-turbo", { audio: Array.from(buf) });
+    const txt = String((out && (out.text || out.response || "")) || "").trim();
+    if (txt) logEvent("transcription_workers_ai_used", { chars: txt.length });
+    return txt;
+  } catch (_) {
+    return "";
+  }
+}
+__name(whisperWorkersAi, "whisperWorkersAi");
 async function kvPutSafe(env, key, val, opts) {
   if (globalThis.__kvOk === false) return;
   try {
@@ -3259,6 +3288,21 @@ async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
       if (content.trim()) return content.trim();
     } catch (_) {
     }
+  }
+  try {
+    const envRef = globalThis.__env;
+    if (envRef && envRef.AI) {
+      const out = await envRef.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userText }],
+        max_tokens: Math.min((maxTokens || 300) + 250, 2000)
+      });
+      const txt = String((out && (out.response || out.result || "")) || "").trim();
+      if (txt) {
+        logEvent("llm_workers_ai_used", {});
+        return txt;
+      }
+    }
+  } catch (_) {
   }
   return "";
 }
