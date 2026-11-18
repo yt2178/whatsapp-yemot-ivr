@@ -1417,6 +1417,7 @@ var worker_default = {
       const emailIntent = /(?:(?<!ג'?י)מייל|(?:^|[\s,.!?]|ה)מיל(?![א-ת])|אימייל|אימיל|email|e-mail|mail|תיבת\s*הדואר|דואר\s*נכנס)/i.test(effectiveText);
       const sendIntent = /(?:שלח|תשלח|שלוח|שליחה|העבר(?![\u05D0-\u05EA])|תעביר(?![\u05D0-\u05EA]))/.test(effectiveText);
       try { globalThis.__dbgTxt = String(transcribedText || "").slice(0, 90); } catch (_) {}
+      try { globalThis.__origReq = String(transcribedText || "").slice(0, 200); } catch (_) {}
       logEvent("transcription_completed", { chars: transcribedText.length, chatIntent, emailIntent, sendIntent });
       if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05D4\u05E6\u05DC\u05D7\u05EA\u05D9 \u05DC\u05E9\u05DE\u05D5\u05E2, \u05D0\u05E0\u05D0 \u05D3\u05D1\u05E8 \u05D1\u05E8\u05D5\u05E8 \u05D9\u05D5\u05EA\u05E8");
       const savedContacts = whisperContacts;
@@ -2841,9 +2842,22 @@ function euroRateText(rate) {
 __name(euroRateText, "euroRateText");
 __name2(euroRateText, "euroRateText");
 __name22(euroRateText, "euroRateText");
+function sendSummaryText(kind, to, toName, subject, body) {
+  const name = String(toName || "").trim();
+  const addr = speakAddress(to);
+  const who = name && addr ? name + " " + addr : (name || addr);
+  const orig = String(globalThis.__origReq || "").trim();
+  const recap = orig ? "לסיכום מה שביקשת: " + orig + ". " : "";
+  const tail = "לשליחה הקש אחת, לביטול הקש שתיים";
+  if (kind === "email") {
+    return recap + "הנה המייל לפני שליחה. נמען: " + who + ". נושא: " + String(subject || "ללא נושא") + ". תוכן ההודעה: " + String(body || "ריק") + ". " + tail;
+  }
+  return recap + "הנה הודעת הצ'אט לפני שליחה. נמען: " + who + ". תוכן ההודעה: " + String(body || "ריק") + ". " + tail;
+}
+__name(sendSummaryText, "sendSummaryText");
 async function chatSendConfirm(env, callerPhone, to, toName, text, prefixNote, account = 1) {
   logEvent("chat_send_pending_confirm", { caller: callerTail(callerPhone) });
-  return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text: text || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05D1\u05E6\u05D0\u05D8 \u05D0\u05DC ${speakAddress(to)} \u05D0\u05EA \u05D4\u05D4\u05D5\u05D3\u05E2\u05D4 ${text || ""}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
+  return await pendingConfirmRead(env, callerPhone, { kind: "chat", to, text: text || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}${sendSummaryText("chat", to, toName, "", text)}`);
 }
 __name(chatSendConfirm, "chatSendConfirm");
 __name2(chatSendConfirm, "chatSendConfirm");
@@ -2881,7 +2895,7 @@ __name22(chatDraftNext, "chatDraftNext");
 
 async function emailSendConfirm(env, callerPhone, to, toName, subject, body, prefixNote, account = 1) {
   logEvent("email_send_pending_confirm", { caller: callerTail(callerPhone), to: String(to || "").slice(0, 40) });
-  return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: subject || "", body: body || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}\u05DC\u05E9\u05DC\u05D5\u05D7 \u05DE\u05D9\u05D9\u05DC \u05D0\u05DC ${speakAddress(to)}, \u05D1\u05E0\u05D5\u05E9\u05D0 ${subject || "\u05DC\u05DC\u05D0 \u05E0\u05D5\u05E9\u05D0"}, \u05E2\u05DD \u05D4\u05EA\u05D5\u05DB\u05DF ${body || "\u05E8\u05D9\u05E7"}? \u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD`);
+  return await pendingConfirmRead(env, callerPhone, { kind: "email", to, subject: subject || "", body: body || "", name: toName || "", account: account || 1 }, `${prefixNote || ""}${sendSummaryText("email", to, toName, subject, body)}`);
 }
 __name(emailSendConfirm, "emailSendConfirm");
 __name2(emailSendConfirm, "emailSendConfirm");
@@ -3353,9 +3367,10 @@ __name2(routeCommunication, "routeCommunication");
 __name22(routeCommunication, "routeCommunication");
 async function pendingConfirmRead(env, callerPhone, pend, promptText) {
   const full = String(promptText || "");
-  const marker = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA";
-  const cut = full.indexOf(marker);
-  const head = cleanYemotText(cut > 0 ? full.slice(0, cut) : full, 300);
+  const markers = ["\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA", "\u05DC\u05E9\u05DC\u05D9\u05D7\u05D4 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA"];
+  let cut = -1;
+  for (const mk of markers) { const i = full.indexOf(mk); if (i > 0 && (cut < 0 || i < cut)) cut = i; }
+  const head = cleanYemotText(cut > 0 ? full.slice(0, cut) : full, 600);
   const question = "\u05DC\u05D0\u05D9\u05E9\u05D5\u05E8 \u05D4\u05E7\u05E9 \u05D0\u05D7\u05EA, \u05DC\u05D1\u05D9\u05D8\u05D5\u05DC \u05D4\u05E7\u05E9 \u05E9\u05EA\u05D9\u05D9\u05DD";
   await doStateFetch(env, "pend_" + normalizeIsraelPhone(callerPhone), "PUT", pend);
 await env.USER_MEMORY.put("pend_" + normalizeIsraelPhone(callerPhone), JSON.stringify(pend), { expirationTtl: 300 });
@@ -3929,7 +3944,7 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
     return speak("לא הבנתי את בקשת המייל");
   } catch (e) {
     logEvent("email_error", { type: e?.name || "Error" });
-    return speak("יש תקלה במערכת המייל, נסה שוב");
+    return speak("המערכת עמוסה כרגע, נסה שוב בעוד דקה");
   }
 }
 __name(handleEmail, "handleEmail");
@@ -4327,7 +4342,7 @@ async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, req
     return speak("אפשר לשאול אם יש הודעות צאט חדשות, לבקש לקרוא הודעה, לחפש הודעה, או לשלוח הודעה מתומללת");
   } catch (error) {
     logEvent("chat_error", { type: error?.name || "Error" });
-    return speak("יש תקלה בחיבור לצאט, נסה שוב");
+    return speak("המערכת עמוסה כרגע, נסה שוב בעוד דקה");
   }
 }
 __name(handleGoogleChat, "handleGoogleChat");
