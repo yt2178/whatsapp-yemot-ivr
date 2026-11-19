@@ -771,6 +771,11 @@ var worker_default = {
         const st2 = await tzGet(env, env.MAILBOX_OWNER_PHONE || "0537876782");
         return Response.json({ primed: st2.primed, seenEmail: (st2.seenEmail || []).length, seenChat: (st2.seenChat || []).length, lastRingAt: st2.lastRingAt });
       }
+      if (k === "resolve") {
+        const nm = url.searchParams.get("name") || "";
+        const rr = await resolveRecipient(env, GROQ_KEY, url.searchParams.get("phone") || "0537876782", nm, 1, nm);
+        return Response.json(rr);
+      }
       if (k === "tztest") {
         const tok = await ensureYemotToken(env);
         const list = url.searchParams.get("list") || "tzl:yt2178whatsapp";
@@ -3354,6 +3359,91 @@ function buildWhisperPrompt(contacts) {
 __name(buildWhisperPrompt, "buildWhisperPrompt");
 __name2(buildWhisperPrompt, "buildWhisperPrompt");
 __name22(buildWhisperPrompt, "buildWhisperPrompt");
+function heToLatin(name) {
+  const map = { "א": "a", "ב": "b", "ג": "g", "ד": "d", "ה": "h", "ו": "o", "ז": "z", "ח": "h", "ט": "t", "י": "i", "כ": "k", "ך": "k", "ל": "l", "מ": "m", "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "a", "פ": "p", "ף": "f", "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t" };
+  const src = String(name || "").trim();
+  if (!src) return [];
+  const words = src.split(/\s+/).filter(Boolean);
+  const latin = words.map((w) => w.split("").map((ch) => map[ch] !== void 0 ? map[ch] : (/[a-zA-Z0-9]/.test(ch) ? ch : "")).join("")).filter(Boolean);
+  const out = new Set();
+  const push = (v) => { const t = String(v || "").replace(/[^a-zA-Z]/g, "").toLowerCase(); if (t.length >= 3) out.add(t); };
+  if (latin.length) {
+    push(latin[0]);
+    push(latin.join(""));
+    push(latin.join(" ").replace(/\s+/g, "."));
+    push(latin[0].replace(/^a/, ""));
+    push(latin[0].replace(/tz/g, "z").replace(/sh/g, "s").replace(/h/g, ""));
+    push(latin[0].replace(/o/g, "u"));
+  }
+  return Array.from(out).slice(0, 6);
+}
+__name(heToLatin, "heToLatin");
+async function emailSearchSender(env, term, account) {
+  const r = await callBridge(env, { action: "search", query: term, max: 12 }, account).catch(() => null);
+  const out = [];
+  const seen = new Set();
+  const tl = String(term || "").toLowerCase();
+  for (const m of (r && r.messages) || []) {
+    const from = String((m && m.from) || "");
+    const addr = (from.match(/<([^>]+)>/) || [null, ""])[1] || (from.includes("@") ? from.trim() : "");
+    if (!addr || !addr.includes("@")) continue;
+    if (/noreply|no-reply|do-?not-?reply|@google\.com$|notification|@.*notice|chat-noreply|drive-shares|@cloudflare|@github|@supabase/i.test(addr)) continue;
+    const disp = cleanFromName(from);
+    if (/via Google Chat|באמצעות Google|Google Drive/i.test(disp)) continue;
+    const hay = (from + " " + disp).toLowerCase();
+    if (!hay.includes(tl)) continue;
+    const key = addr.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: disp || addr, address: addr });
+  }
+  return out.slice(0, 4);
+}
+__name(emailSearchSender, "emailSearchSender");
+async function resolveRecipient(env, GROQ_KEY, callerPhone, rawTo, account, userText) {
+  const wanted = String(rawTo || "").trim();
+  const addrGuess = normalizeAddress(wanted);
+  if (addrGuess.includes("@") && (addrGuess.split("@")[1] || "").includes(".")) {
+    return { status: "ok", to: addrGuess, toName: "", note: "", via: "address" };
+  }
+  const contacts = await getContacts(env, callerPhone);
+  const namesOf = (c) => [c && c.name, ...((c && c.aliases) || [])].map((x) => normalizeContactTerm(x)).filter((x) => x && x.length >= 3);
+  const dedupe = (arr) => {
+    const out = [];
+    for (const c of arr || []) {
+      const ns = namesOf(c);
+      if (!ns.length) continue;
+      const dup = out.some((d) => {
+        const ds = namesOf(d);
+        return ns.some((n) => ds.some((dn) => dn === n || dn.includes(n) || n.includes(dn)));
+      });
+      if (!dup) out.push(c);
+    }
+    return out;
+  };
+  const hebName = (c) => {
+    const all = [c && c.name, ...((c && c.aliases) || [])].filter(Boolean);
+    return all.find((x) => /[\u05D0-\u05EA]/.test(String(x))) || String((c && c.name) || "");
+  };
+  const matches = dedupe(findContactMatches(contacts, wanted));
+  if (matches.length === 1) return { status: "ok", to: matches[0].address, toName: hebName(matches[0]), note: "", via: "contact" };
+  if (matches.length > 1) return { status: "multi", candidates: matches.slice(0, 4), via: "contact" };
+  const hebTry = await emailSearchSender(env, wanted, account);
+  if (hebTry.length === 1) return { status: "ok", to: hebTry[0].address, toName: hebTry[0].name, note: "מצאתי במייל את " + hebTry[0].name + ". ", via: "email_search_he" };
+  if (hebTry.length > 1) return { status: "multi", candidates: dedupe(hebTry), via: "email_search_he" };
+  const terms = heToLatin(wanted);
+  for (const term of terms) {
+    const found = await emailSearchSender(env, term, account);
+    if (found.length === 1) return { status: "ok", to: found[0].address, toName: found[0].name, note: "מצאתי במייל את " + found[0].name + ". ", via: "email_search" };
+    if (found.length > 1) return { status: "multi", candidates: dedupe(found), via: "email_search" };
+  }
+  const fuzzyContact = findFuzzyContact(contacts, wanted);
+  if (fuzzyContact) return { status: "ok", to: fuzzyContact.address, toName: fuzzyContact.name, note: "האם התכוונת ל" + fuzzyContact.name + "? ", via: "fuzzy" };
+  const deep = await deepContactLookup(env, GROQ_KEY, callerPhone, wanted, userText || wanted);
+  if (deep.found) return { status: "ok", to: deep.address, toName: deep.name, note: "האם התכוונת ל" + deep.name + "? ", via: "deep" };
+  return { status: "none", tried: [wanted, ...(deep.tried || []), ...terms] };
+}
+__name(resolveRecipient, "resolveRecipient");
 function findContactMatches(contacts, requestedName) {
   const variants = nameVariants(requestedName);
   for (const wanted of variants) {
@@ -4189,20 +4279,20 @@ async function handleEmail(env, GROQ_KEY, transcribedText, callerPhone, requestI
               toName = fuzzyContact.name;
               resolveNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + fuzzyContact.name + "? ";
             } else {
-              const addrGuess = normalizeAddress(rawTo);
-              if (addrGuess.includes("@") && addrGuess.split("@")[1]?.includes(".")) {
-                to = addrGuess;
+              const rr = await resolveRecipient(env, GROQ_KEY, callerPhone, rawTo, account || 1, transcribedText);
+              if (rr.status === "ok") {
+                to = rr.to;
+                toName = rr.toName || "";
+                resolveNote = rr.note || "";
+                logEvent("contact_resolved", { flow: "email_send", via: rr.via });
+              } else if (rr.status === "multi") {
+                const question = contQuestionFor(rr.candidates);
+                await setContState(env, callerPhone, { kind: "contact", action: "email_send", payload: { subject: p.subject || "", body: p.body || "", account }, candidates: slimCandidates(rr.candidates), originalRequest: transcribedText, question, ts: Date.now() });
+                logEvent("contact_multi", { flow: "email_send", count: rr.candidates.length, via: rr.via });
+                return speak(question);
               } else {
-                const deep = await deepContactLookup(env, GROQ_KEY, callerPhone, rawTo, transcribedText);
-                if (deep.found) {
-                  to = deep.address;
-                  toName = deep.name;
-                  resolveNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + deep.name + "? ";
-                  logEvent("deep_contact_found", { flow: "email_send", variant: (deep.variant || "").slice(0, 40) });
-                } else {
-                  logEvent("deep_contact_miss", { flow: "email_send" });
-                  return speak(await naturalMiss(GROQ_KEY, "contact", transcribedText, [rawTo, ...(deep.tried || [])]));
-                }
+                logEvent("contact_none", { flow: "email_send" });
+                return speak("לא מצאתי איש קשר בשם " + rawTo + " ולא מצאתי אותו במיילים. מה כתובת המייל שלו?");
               }
             }
           }
@@ -4610,20 +4700,20 @@ async function handleGoogleChat(env, GROQ_KEY, transcribedText, callerPhone, req
               toName = fuzzyContact.name;
               prefixNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + fuzzyContact.name + "? ";
             } else {
-              const addrGuess = normalizeAddress(rawTo);
-              if (addrGuess.includes("@") && addrGuess.split("@")[1]?.includes(".")) {
-                to = addrGuess;
+              const rr2 = await resolveRecipient(env, GROQ_KEY, callerPhone, rawTo, account || 1, transcribedText);
+              if (rr2.status === "ok") {
+                to = rr2.to;
+                toName = rr2.toName || "";
+                prefixNote = rr2.note || "";
+                logEvent("contact_resolved", { flow: "chat_send", via: rr2.via });
+              } else if (rr2.status === "multi") {
+                const question2 = contQuestionFor(rr2.candidates);
+                await setContState(env, callerPhone, { kind: "contact", action: "chat_send", payload: { text, account }, candidates: slimCandidates(rr2.candidates), originalRequest: transcribedText, question: question2, ts: Date.now() });
+                logEvent("contact_multi", { flow: "chat_send", count: rr2.candidates.length, via: rr2.via });
+                return speak(question2);
               } else {
-                const deep = await deepContactLookup(env, GROQ_KEY, callerPhone, rawTo, transcribedText);
-                if (deep.found) {
-                  to = deep.address;
-                  toName = deep.name;
-                  prefixNote = "\u05D4\u05D0\u05DD \u05D4\u05EA\u05DB\u05D5\u05D5\u05E0\u05EA \u05DC" + deep.name + "? ";
-                  logEvent("deep_contact_found", { flow: "chat_send", variant: (deep.variant || "").slice(0, 40) });
-                } else {
-                  logEvent("deep_contact_miss", { flow: "chat_send" });
-                  return speak(await naturalMiss(GROQ_KEY, "contact", transcribedText, [rawTo, ...(deep.tried || [])]));
-                }
+                logEvent("contact_none", { flow: "chat_send" });
+                return speak("לא מצאתי איש קשר בשם " + rawTo + " ולא מצאתי אותו בצ\'אט ובמייל. מה כתובת המייל שלו?");
               }
             }
           }
