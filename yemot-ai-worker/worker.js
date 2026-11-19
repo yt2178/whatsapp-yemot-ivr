@@ -598,6 +598,9 @@ var worker_default = {
     try {
       if (String(event.cron || "") === "* * * * *" || String(event.cron || "").startsWith("*/2")) {
         try { await buildNewsAudio(env); } catch (_) {}
+        try {
+          if (new Date().getUTCMinutes() % 5 === 0) await checkNotifications(env);
+        } catch (_) {}
         return;
       }
     } catch (_) {}
@@ -762,6 +765,22 @@ var worker_default = {
       if (k === "newsbuild") {
         const res = await buildNewsAudio(env);
         return Response.json(res);
+      }
+      if (k === "tzcheck") {
+        await checkNotifications(env);
+        const st2 = await tzGet(env, env.MAILBOX_OWNER_PHONE || "0537876782");
+        return Response.json({ primed: st2.primed, seenEmail: (st2.seenEmail || []).length, seenChat: (st2.seenChat || []).length, lastRingAt: st2.lastRingAt });
+      }
+      if (k === "tztest") {
+        const tok = await ensureYemotToken(env);
+        const list = url.searchParams.get("list") || "tzl:yt2178whatsapp";
+        const r = await fetch("https://www.call2all.co.il/ym/api/RunTzintuk?token=" + tok + "&phones=" + encodeURIComponent(list), { headers: { "User-Agent": "Mozilla/5.0" } });
+        const txt = await r.text();
+        return Response.json({ status: r.status, body: txt.slice(0, 200) });
+      }
+      if (k === "tzstatus") {
+        const st = await tzGet(env, env.MAILBOX_OWNER_PHONE || "0537876782");
+        return Response.json({ settings: st });
       }
       if (k === "whispertest") {
         const dir = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:3/r");
@@ -1461,6 +1480,10 @@ var worker_default = {
         }
       }
       const effectiveText = convo && isShortReply && String(convo.lastAnswer || "").includes("?") && convo.lastUser ? String(convo.lastUser + " " + transcribedText).slice(0, 280) : transcribedText;
+      try {
+        const tzAns = await handleTzintukCommand(env, effectiveText, callerPhone, GROQ_KEY);
+        if (tzAns) return tzAns;
+      } catch (_) {}
       const chatWord = "(?:צ[׳'״\"]?[אע]?[טת]|ש[׳'״\"]?[אע][טת]|chat)(?:ים)?(?![א-ת])";
       const chatReadFollowUp = /(?:^|\s)(?:קרא|תקרא|הקרא|שמע|תשמע|השמע|קריאה)\s+(?:את\s+)?ה?הודע[הת](?![א-ת])/.test(effectiveText);
       let chatIntent = new RegExp("(?:(?:גוגל|google|גוגול).{0,20}(?:" + chatWord + ")|(?:" + chatWord + ").{0,20}(?:גוגל|google|גוגול)|(?:^|[\\s,])[בהל]?(?:" + chatWord + ")|איש\\s+קשר)", "i").test(effectiveText) || chatReadFollowUp;
@@ -2097,6 +2120,166 @@ async function findNewestRecordingOnce(env, callerPhone) {
 }
 __name(findNewestRecording, "findNewestRecording");
 __name2(findNewestRecording, "findNewestRecording");
+async function tzGet(env, phone) {
+  const key = "tzset_" + normalizeIsraelPhone(phone);
+  let st = null;
+  try { st = await kvGetJson(env, key); } catch (_) {}
+  const d = { email: true, chat: true, mode: "blacklist", list: [], seenEmail: [], seenChat: [], primed: false, lastRingAt: 0 };
+  return Object.assign(d, st || {});
+}
+__name(tzGet, "tzGet");
+async function tzSave(env, phone, st) {
+  try { await kvPutJson(env, "tzset_" + normalizeIsraelPhone(phone), st, 31536000); } catch (_) {}
+}
+__name(tzSave, "tzSave");
+function tzAllows(st, sender) {
+  const s = String(sender || "").toLowerCase();
+  const list = (st.list || []).map((x) => String(x).toLowerCase()).filter(Boolean);
+  if (!list.length) return st.mode !== "whitelist";
+  const hit = list.some((x) => s.includes(x));
+  return st.mode === "whitelist" ? hit : !hit;
+}
+__name(tzAllows, "tzAllows");
+async function runTzintuk(env, phone) {
+  try {
+    const tok = await ensureYemotToken(env);
+    const list = (globalThis.__env && globalThis.__env.TZINTUK_LIST) || "tzl:yt2178whatsapp";
+    const r = await fetch("https://www.call2all.co.il/ym/api/RunTzintuk?token=" + tok + "&phones=" + encodeURIComponent(list), { headers: { "User-Agent": "Mozilla/5.0" } });
+    const txt = await r.text();
+    logEvent("tzintuk_sent", { status: r.status, ok: /OK/i.test(txt) });
+    return /OK/i.test(txt);
+  } catch (_) {
+    return false;
+  }
+}
+__name(runTzintuk, "runTzintuk");
+function tzSettingsText(st) {
+  const list = (st.list || []).filter(Boolean);
+  const modeTxt = st.mode === "whitelist" ? "אני מצנתק רק מ: " : "אני מצנתק מכולם חוץ מ: ";
+  const listTxt = list.length ? modeTxt + list.join(", ") : "אין רשימת חריגים";
+  return "צינתוקים למייל " + (st.email ? "פועלים" : "כבויים") + ", לצ'אט " + (st.chat ? "פועלים" : "כבויים") + ". " + listTxt + ".";
+}
+__name(tzSettingsText, "tzSettingsText");
+async function handleTzintukCommand(env, text, callerPhone, GROQ_KEY) {
+  const t = String(text || "");
+  if (!/צנתק|צינתק|צנתוק|צינתוק|צינטוק|צלצול/.test(t)) return null;
+  if (!callerPhone) return null;
+  const st = await tzGet(env, callerPhone);
+  const mailW = /מייל|אימייל|דואר|email|mail/i.test(t);
+  const chatW = /צ[׳'״"]?אט|chat|הודעות|וואטסאפ/i.test(t);
+  const offW = /(?:תכבה|כבה|תבטל|בטל|תפסיק|הפסק|לא\s+רוצה|אל\s+תשלח|תוריד)/.test(t);
+  const onW = /(?:תפעיל|הפעל|תדליק|הדלק|תחזיר|תשלח|כן)/.test(t);
+  if (/מה\s+(?:המצב|ההגדרות)|איזה\s+הגדרות|תגיד\s+לי\s+מה\s+המצב|הגדרות\s+צינתוק/.test(t)) {
+    return speak(tzSettingsText(st));
+  }
+  if (/אפס|בטל\s+הכל|החזר\s+הכל/.test(t)) {
+    st.list = [];
+    st.mode = "blacklist";
+    st.email = true;
+    st.chat = true;
+    await tzSave(env, callerPhone, st);
+    return speak("איפסתי את הגדרות הצינתוק. צינתוקים למייל ולצ'אט פועלים, בלי רשימת חריגים.");
+  }
+  const addMatch = t.match(/(?:אל\s+תצנתק|תפסיק\s+לצנתק|לא\s+לצנתק|בלי\s+צינתוק)\s+(?:לי\s+)?(?:מ|מאת)\s*(.{2,40})/);
+  const onlyMatch = t.match(/(?:רק|אך\s+ורק)\s+(?:מ|מאת)\s*(.{2,40})/);
+  const removeMatch = t.match(/(?:תצנתק|תחזיר\s+צינתוק|תפעיל\s+צינתוק)\s+(?:לי\s+)?(?:מ|מאת)\s*(.{2,40})/);
+  const cleanName = (x) => String(x || "").replace(/[.?!,]+$/, "").trim();
+  if (onlyMatch) {
+    const nm = cleanName(onlyMatch[1]);
+    st.mode = "whitelist";
+    if (nm && !st.list.includes(nm)) st.list.push(nm);
+    await tzSave(env, callerPhone, st);
+    return speak("מעכשיו אצנתק רק מ" + nm + ". שאר ההודעות לא יצנתקו.");
+  }
+  if (addMatch) {
+    const nm = cleanName(addMatch[1]);
+    st.mode = "blacklist";
+    if (nm && !st.list.some((x) => x.toLowerCase() === nm.toLowerCase())) st.list.push(nm);
+    await tzSave(env, callerPhone, st);
+    return speak("לא אצנתק יותר הודעות מ" + nm + ". כל השאר ימשיכו לצנתק.");
+  }
+  if (removeMatch) {
+    const nm = cleanName(removeMatch[1]);
+    st.list = (st.list || []).filter((x) => x.toLowerCase() !== nm.toLowerCase() && !x.toLowerCase().includes(nm.toLowerCase()));
+    await tzSave(env, callerPhone, st);
+    return speak("הסרתי את " + nm + " מרשימת החריגים, הוא יחזור לצנתק.");
+  }
+  if (mailW && !chatW) {
+    st.email = !offW;
+    await tzSave(env, callerPhone, st);
+    return speak(st.email ? "צינתוקים על מיילים הופעלו" : "צינתוקים על מיילים כובו");
+  }
+  if (chatW && !mailW) {
+    st.chat = !offW;
+    await tzSave(env, callerPhone, st);
+    return speak(st.chat ? "צינתוקים על הודעות צ'אט הופעלו" : "צינתוקים על הודעות צ'אט כובו");
+  }
+  if (mailW && chatW) {
+    const val = !offW;
+    st.email = val;
+    st.chat = val;
+    await tzSave(env, callerPhone, st);
+    return speak(val ? "צינתוקים על מייל וצ'אט הופעלו" : "צינתוקים על מייל וצ'אט כובו");
+  }
+  return speak(tzSettingsText(st) + " להגיד לי להפסיק לצנתק ממישהו, אמור אל תצנתק מגוגל.");
+}
+__name(handleTzintukCommand, "handleTzintukCommand");
+async function checkNotifications(env) {
+  try {
+    const owner = env.MAILBOX_OWNER_PHONE;
+    if (!owner) return;
+    const st = await tzGet(env, owner);
+    if (!st.email && !st.chat) return;
+    const now = Date.now();
+    if (st.lastRingAt && now - st.lastRingAt < 8 * 6e4) return;
+    const seenE = new Set(st.seenEmail || []);
+    const seenC = new Set(st.seenChat || []);
+    const sinceMs = Number(st.lastCheckAt || 0);
+    const fresh = [];
+    if (st.email) {
+      for (const acct of [1, 2]) {
+        const r = await callBridge(env, { action: "search", query: "is:unread newer_than:1d", max: 10 }, acct).catch(() => null);
+        for (const m of (r && r.messages) || []) {
+          if (!m || !m.id || seenE.has(m.id)) continue;
+          seenE.add(m.id);
+          const mts = Date.parse(m.date || m.internalDate || "") || 0;
+          if (sinceMs && mts && mts <= sinceMs) continue;
+          if (st.primed && tzAllows(st, String(m.from || "") + " " + String(m.name || ""))) fresh.push({ ch: "email", from: m.from, subject: m.subject });
+        }
+      }
+    }
+    if (st.chat) {
+      const msgs = await chatRecentMessages(env, 1, 25).catch(() => []);
+      for (const m of msgs || []) {
+        const sender = String(m.name || m.sender || m.from || "");
+        const id = String(m.id || m.messageId || (sender + "|" + String(m.createTime || "") + "|" + String(m.text || "").slice(0, 24)));
+        if (!id || seenC.has(id)) continue;
+        seenC.add(id);
+        const cts = Number(m.ts || Date.parse(m.createTime || "") || 0);
+        if (sinceMs && cts && cts <= sinceMs) continue;
+        if (st.primed && tzAllows(st, sender)) fresh.push({ ch: "chat", from: sender });
+      }
+    }
+    st.lastCheckAt = now;
+    st.seenEmail = Array.from(seenE).slice(-60);
+    st.seenChat = Array.from(seenC).slice(-60);
+    if (!st.primed) {
+      st.primed = true;
+      await tzSave(env, owner, st);
+      logEvent("tzintuk_primed", {});
+      return;
+    }
+    if (fresh.length) {
+      const ok = await runTzintuk(env, owner);
+      if (ok) st.lastRingAt = now;
+      logEvent("tzintuk_fired", { count: fresh.length, ok });
+    }
+    await tzSave(env, owner, st);
+  } catch (e) {
+    logEvent("tzintuk_check_error", { msg: String((e && e.message) || e).slice(0, 80) });
+  }
+}
+__name(checkNotifications, "checkNotifications");
 async function whisperWorkersAi(env, blob) {
   try {
     if (!env || !env.AI || !blob) return "";
