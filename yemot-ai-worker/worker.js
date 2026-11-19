@@ -676,6 +676,10 @@ var worker_default = {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(5) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       return await handleTlkRequest(env, params, callerPhone, ctx);
     }
+    if (url.pathname.startsWith("/qa/")) {
+      if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(4) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
+      return await handleQaRequest(env, params, callerPhone, ctx);
+    }
     if (url.pathname.startsWith("/news/")) {
       if (!env.MAILBOX_PATH_SECRET || url.pathname.slice(6) !== env.MAILBOX_PATH_SECRET) return new Response("denied", { status: 403 });
       return await handleNewsRequest(env, params, callerPhone, ctx);
@@ -1235,6 +1239,7 @@ var worker_default = {
       }
       if (!transcribedText) return textResponse("id_list_message=t-\u05DC\u05D0 \u05E9\u05DE\u05E2\u05EA\u05D9 \u05D0\u05D5\u05EA\u05DA, \u05D0\u05DE\u05D5\u05E8 \u05D0\u05EA \u05D1\u05E7\u05E9\u05EA\u05DA \u05D1\u05E7\u05D5\u05DC \u05E8\u05DD");
       globalThis.__callId = callId;
+      globalThis.__callerPhone = callerPhone;
       const cont = await kvGetList(env, contStateKey(callerPhone));
       if (cont && cont.kind && Date.now() - (cont.ts || 0) < (cont.kind === "currency" ? 180000 : 600000)) {
         const contRes = resolveContinuation(cont, transcribedText, whisperContacts);
@@ -2601,6 +2606,52 @@ async function handleBreakingRequest(env, params, callerPhone, ctx) {
   return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
 }
 __name(handleBreakingRequest, "handleBreakingRequest");
+async function qaHistory(env, phone) {
+  try {
+    const h = await kvGetJson(env, "qa_" + normalizeIsraelPhone(phone));
+    return Array.isArray(h) ? h : [];
+  } catch (_) {
+    return [];
+  }
+}
+__name(qaHistory, "qaHistory");
+function heNum(n) {
+  const w = ["אפס", "אחת", "שתיים", "שלוש", "ארבע", "חמש", "שש", "שבע", "שמונה", "תשע"];
+  return w[n] || String(n);
+}
+__name(heNum, "heNum");
+async function handleQaRequest(env, params, callerPhone, ctx) {
+  const hist = await qaHistory(env, callerPhone);
+  const dig = String(params.ApiSig || params.sig || "").trim();
+  if (!hist.length) {
+    const f0 = await ttsTextToYemotFile(env, "עוד לא שאלת אותי שאלות בשיחה. חזור לתפריט הראשי");
+    return textResponse((f0 ? "id_list_message=f-" + f0 : "id_list_message=t-" + encodeURIComponent("עוד לא שאלת אותי שאלות")) + "&go_to_folder=/");
+  }
+  const items = hist.slice(-9);
+  if (!dig) {
+    let t = "אלה השאלות האחרונות ששאלת. ";
+    items.forEach((it, i) => {
+      t += "שאלה " + heNum(i + 1) + ": " + String(it.q || "").replace(/[.\-]+/g, " ").slice(0, 90) + ". ";
+    });
+    t += "לשמיעת התשובה הקישו את מספר השאלה. לחזרה לתפריט הקישו אפס.";
+    const f = await ttsTextToYemotFile(env, t);
+    const p = await ttsTextToYemotFile(env, "הקישו מספר שאלה");
+    if (!f) return textResponse("go_to_folder=/");
+    return textResponse("id_list_message=f-" + f + (p ? "&read=f-" + p + "=qa,no,1,1,25,Digits,yes,yes,,,,,None," : ""));
+  }
+  const idx = parseInt(dig, 10);
+  if (!idx || idx < 1 || idx > items.length) {
+    return textResponse("go_to_folder=/");
+  }
+  const it = items[idx - 1];
+  const answer = String(it.a || "").replace(/[.\-]+/g, " ");
+  const t2 = "שאלה " + heNum(idx) + ": " + String(it.q || "").slice(0, 140) + ". התשובה: " + answer.slice(0, 900);
+  const f2 = await ttsTextToYemotFile(env, t2);
+  const p2 = await ttsTextToYemotFile(env, "לשמיעת שאלה נוספת הקישו את המספר, ליציאה הקישו אפס");
+  if (!f2) return textResponse("go_to_folder=/");
+  return textResponse("id_list_message=f-" + f2 + (p2 ? "&read=f-" + p2 + "=qa,no,1,1,25,Digits,yes,yes,,,,,None," : ""));
+}
+__name(handleQaRequest, "handleQaRequest");
 async function handleNewsRequest(env, params, callerPhone, ctx) {
   if (String(params.mode || "") === "breaking") return await handleBreakingRequest(env, params, callerPhone, ctx);
   const key = String(params.newsopt || params.key || "").trim();
@@ -3543,6 +3594,20 @@ async function saveConvoTurn(env, userText, answerText) {
     const key = "convo_" + callId;
     let prev = {}; try { const pDo = await doStateFetch(env, key, "GET"); prev = (pDo && pDo.value && pDo.value.turns) ? pDo.value : JSON.parse(await env.USER_MEMORY.get(key) || "{}") || {}; } catch (_) {}
     const turns = [...(prev.turns || []), { u: String(userText || "").slice(0, 200), a: String(answerText || "").slice(0, 300) }].slice(-6);
+    try {
+      const ph = normalizeIsraelPhone(globalThis.__callerPhone || "");
+      const q = String(userText || "").trim();
+      const a = String(answerText || "").trim();
+      if (ph && q.length > 1 && a.length > 1) {
+        const histKey = "qa_" + ph;
+        let hist = [];
+        try { hist = (await kvGetJson(env, histKey)) || []; } catch (_) {}
+        if (!Array.isArray(hist)) hist = [];
+        const last = hist[hist.length - 1];
+        if (!last || last.q !== q || last.a !== a) hist.push({ q: q.slice(0, 220), a: a.slice(0, 900), ts: Date.now() });
+        await kvPutJson(env, histKey, hist.slice(-25), 2592000);
+      }
+    } catch (_) {}
     await doStateFetch(env, key, "PUT", { turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() });
     await kvPutSafe(env, key, JSON.stringify({ turns, lastUser: String(userText || "").slice(0, 200), lastAnswer: String(answerText || "").slice(0, 300), ts: Date.now() }), { expirationTtl: 900 });
   } catch (_) {}
