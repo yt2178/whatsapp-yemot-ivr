@@ -763,12 +763,42 @@ var worker_default = {
         const res = await buildNewsAudio(env);
         return Response.json(res);
       }
+      if (k === "whispertest") {
+        const dir = await yemotApiJson(env, "GetIVR2Dir?path=ivr2:3/r");
+        const files = ((dir && dir.files) || []).filter((f) => /\.wav$/i.test(String(f.name || "")) && !String(f.name || "").startsWith("~"));
+        files.sort((a, b) => (parseYemotDate(b.date || b.mtime) || 0) - (parseYemotDate(a.date || a.mtime) || 0));
+        const target = files[0];
+        if (!target) return Response.json({ error: "no recording" });
+        const tok = await ensureYemotToken(env);
+        const r = await fetch("https://www.call2all.co.il/ym/api/DownloadFile?token=" + tok + "&path=ivr2:3/r/" + target.name, { headers: { "User-Agent": "Mozilla/5.0" } });
+        const blob = await r.blob();
+        const t0 = Date.now();
+        if (url.searchParams.get("via") === "fn") {
+          const t = await whisperWorkersAi(env, blob);
+          return Response.json({ file: target.name, bytes: blob.size, ms: Date.now() - t0, via: "fn", text: String(t).slice(0, 200) });
+        }
+        let txt = "", errMsg = "";
+        const model = url.searchParams.get("m") || "@cf/openai/whisper-large-v3-turbo";
+        try {
+          const buf = new Uint8Array(await blob.arrayBuffer());
+          const lang = url.searchParams.get("lang") || "he";
+          const shape = url.searchParams.get("shape") || "arr";
+          let payload;
+          if (shape === "u8") payload = { audio: buf };
+          else if (shape === "b64") { let bin = ""; for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]); payload = { audio: btoa(bin) }; }
+          else payload = { audio: Array.from(buf) };
+          if (lang) payload.language = lang;
+          const out = await env.AI.run(model, payload);
+          txt = String((out && (out.text || out.response || "")) || "");
+        } catch (e) { errMsg = String((e && e.message) || e); }
+        return Response.json({ file: target.name, bytes: blob.size, ms: Date.now() - t0, model, text: txt.slice(0, 200), err: errMsg.slice(0, 160) });
+      }
       if (k === "aitest") {
         const q = url.searchParams.get("q") || "\u05DE\u05D4\u05D9 \u05D1\u05D9\u05E8\u05EA \u05E8\u05D5\u05E1\u05D9\u05D4";
         const t0 = Date.now();
         let ans = "";
         if (url.searchParams.get("mode") === "ai") {
-          try { const o = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", { messages: [{ role: "user", content: q }], max_tokens: 120 }); ans = String((o && (o.response || o.result)) || ""); } catch (e) { ans = "ERR:" + String((e && e.message) || e); }
+          try { const mm = url.searchParams.get("m") || "@cf/meta/llama-3.1-8b-instruct"; const o = await env.AI.run(mm, { messages: [{ role: "user", content: q }], max_tokens: 120 }); ans = String((o && (o.response || o.result)) || ""); } catch (e) { ans = "ERR:" + String((e && e.message) || e); }
         } else {
           ans = await groqChatShort(GROQ_KEY, "\u05E2\u05E0\u05D4 \u05D1\u05E7\u05E6\u05E8\u05D4 \u05D1\u05E2\u05D1\u05E8\u05D9\u05EA", q, 80);
         }
@@ -2071,10 +2101,22 @@ async function whisperWorkersAi(env, blob) {
   try {
     if (!env || !env.AI || !blob) return "";
     const buf = new Uint8Array(await blob.arrayBuffer());
-    const out = await env.AI.run("@cf/openai/whisper-large-v3-turbo", { audio: Array.from(buf) });
-    const txt = String((out && (out.text || out.response || "")) || "").trim();
-    if (txt) logEvent("transcription_workers_ai_used", { chars: txt.length });
-    return txt;
+    if (!buf.length) return "";
+    let bin = "";
+    for (let i = 0; i < buf.length; i++) bin += String.fromCharCode(buf[i]);
+    const b64 = btoa(bin);
+    for (const m of ["@cf/openai/whisper-large-v3-turbo", "@cf/openai/whisper"]) {
+      try {
+        const out = await env.AI.run(m, { audio: b64, language: "he" });
+        const txt = String((out && (out.text || out.response || "")) || "").trim();
+        if (txt) {
+          logEvent("transcription_workers_ai_used", { model: m.slice(-12), chars: txt.length });
+          return txt;
+        }
+      } catch (_) {
+      }
+    }
+    return "";
   } catch (_) {
     return "";
   }
@@ -3292,14 +3334,20 @@ async function groqChatShort(GROQ_KEY, systemPrompt, userText, maxTokens) {
   try {
     const envRef = globalThis.__env;
     if (envRef && envRef.AI) {
-      const out = await envRef.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userText }],
-        max_tokens: Math.min((maxTokens || 300) + 250, 2000)
-      });
-      const txt = String((out && (out.response || out.result || "")) || "").trim();
-      if (txt) {
-        logEvent("llm_workers_ai_used", {});
-        return txt;
+      const aiModels = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/mistralai/mistral-small-3.1-24b-instruct"];
+      for (const am of aiModels) {
+        try {
+          const out = await envRef.AI.run(am, {
+            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userText }],
+            max_tokens: Math.min((maxTokens || 300) + 250, 2000)
+          });
+          const txt = String((out && (out.response || out.result || "")) || "").trim();
+          if (txt) {
+            logEvent("llm_workers_ai_used", { model: am.slice(-20) });
+            return txt;
+          }
+        } catch (_) {
+        }
       }
     }
   } catch (_) {
